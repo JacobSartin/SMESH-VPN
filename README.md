@@ -23,6 +23,9 @@ A secure mesh VPN with Post-Quantum Cryptography.
 
 ## Requirements
 
+- Go 1.20+ (developed with Go 1.24)
+- For TUN/TAP interface: Appropriate drivers for your OS
+
 ## Installation
 
 1. Clone the repository:
@@ -32,71 +35,49 @@ git clone https://github.com/JacobSartin/SMESH-VPN.git
 cd SMESH-VPN
 ```
 
-2. Install dependencies:
+2. Build the binaries:
 
 ```bash
-pip install -r requirements.txt
+# If using Windows with WSL for Make
+wsl make
+
+# If using native Make
+make
 ```
+
+This will create both client and server binaries for Windows and Linux in the `bin/` directory.
 
 ## Certificate Setup
 
 SMESH-VPN uses certificate-based authentication to ensure that only authorized clients can connect to the network and to protect against MITM attacks.
 
-### Create a Certificate Authority (CA)
-
-Before clients can connect, you need to set up a Certificate Authority:
-
-```bash
-python ca_manager.py --create-ca --ca-dir ca
-```
-
-### Issue Client Certificates
-
-Issue certificates for each client that needs to connect:
-
-```bash
-python ca_manager.py --issue-cert --ca-dir ca --common-name "Client1"
-```
-
-This will generate a client certificate in the `ca/clients/<client_id>` directory.
-
-### List Authorized Clients
-
-To view all authorized clients:
-
-```bash
-python ca_manager.py --list-clients --ca-dir ca
-```
-
-### Revoke Client Certificates
-
-To revoke a certificate:
-
-```bash
-python ca_manager.py --revoke-cert --ca-dir ca --client-id <client_id>
-```
+(Certificate management functionality is in development.)
 
 ## Running the Discovery Server
 
 Start the discovery server:
 
 ```bash
-sudo python server/discovery_server.py
+# Linux
+./bin/smesh-server_linux_amd64.exe
+
+# Windows
+.\bin\smesh-server_windows_amd64.exe
 ```
 
 ## Running a Client
 
-Start a VPN client with certificate authentication:
+Start a VPN client:
 
 ```bash
-sudo python client/client.py --cert-dir ca/clients/<client_id> --client-id <client_id>
+# Linux
+./bin/smesh-client_linux_amd64.exe
+
+# Windows
+.\bin\smesh-client_windows_amd64.exe
 ```
 
-Or specify additional parameters:
-
-```bash
-sudo python client/client.py -i 10.10.0.2 -p 9000 -d discovery.example.com:8000 --cert-dir ca/clients/<client_id> --client-id <client_id>
-```
+Configuration options will be available through command line flags or a configuration file.
 
 ## Security Considerations
 
@@ -119,7 +100,14 @@ docker-compose up -d
 Run the tests:
 
 ```bash
-python -m unittest discover tests
+# Run all tests
+go test ./...
+
+# Run tests for a specific package
+go test ./pkg/PQXDH
+
+# Run tests with coverage
+go test -cover ./...
 ```
 
 ## License

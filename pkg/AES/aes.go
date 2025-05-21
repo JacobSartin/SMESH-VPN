@@ -49,6 +49,7 @@ func NewAES256(key []byte) (*AES256, error) {
 		return nil, fmt.Errorf("failed to create GCM: %w", err)
 	}
 
+	// TODO: remove key? already stored in the cipher
 	// Create a copy of the key to prevent modification from outside
 	keyCopy := make([]byte, len(key))
 	copy(keyCopy, key)
@@ -100,11 +101,38 @@ func (a *AES256) Decrypt(ciphertext []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// ZeroKey securely wipes the key from memory
 // Call this method when you're done using the AES256 instance
-func (a *AES256) ZeroKey() {
+// to ensure the key is zeroed out and not left in memory.
+func (a *AES256) Close() {
 	// Overwrite the key with zeros
 	for i := range a.key {
 		a.key[i] = 0
 	}
+}
+
+// WithAES256 creates a new AES256 instance and automatically cleans up the key
+// when the provided function completes, even if it panics.
+// This is the recommended way to use AES256 for maximum safety.
+//
+// Example usage:
+//
+//	err := WithAES256(key, func(cipher *AES256) error {
+//	    ciphertext, err := cipher.Encrypt(plaintext)
+//	    if err != nil {
+//	        return err
+//	    }
+//	    // Process ciphertext...
+//	    return nil
+//	})
+func WithAES256(key []byte, fn func(*AES256) error) error {
+	cipher, err := NewAES256(key)
+	if err != nil {
+		return err
+	}
+
+	// This ensures the key is wiped even if fn panics
+	defer cipher.Close()
+
+	// Execute the provided function with the cipher
+	return fn(cipher)
 }

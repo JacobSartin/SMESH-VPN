@@ -154,8 +154,8 @@ func TestDecryptInvalidData(t *testing.T) {
 	}
 }
 
-// TestZeroKey tests the secure wiping of the key
-func TestZeroKey(t *testing.T) {
+// TestClose tests the secure wiping of the key
+func TestClose(t *testing.T) {
 	// Generate a random key
 	key := make([]byte, KeySize256)
 	_, err := io.ReadFull(rand.Reader, key)
@@ -182,12 +182,12 @@ func TestZeroKey(t *testing.T) {
 	}
 
 	// Zero out the key
-	aesInstance.ZeroKey()
+	aesInstance.Close()
 
 	// Verify the key is now all zeros
 	for i, b := range aesInstance.key {
 		if b != 0 {
-			t.Errorf("Key byte at position %d is not zero after ZeroKey call", i)
+			t.Errorf("Key byte at position %d is not zero after Close call", i)
 		}
 	}
 }

@@ -6,8 +6,8 @@ import (
 	"io"
 	"testing"
 
-	"github.com/JacobSartin/SMESH-VPN/AES"
-	"github.com/JacobSartin/SMESH-VPN/PQXDH"
+	"github.com/JacobSartin/SMESH-VPN/pkg/AES"
+	"github.com/JacobSartin/SMESH-VPN/pkg/PQXDH"
 )
 
 // TestPQXDHToAESIntegration tests the complete flow:
@@ -41,13 +41,13 @@ func TestPQXDHToAESIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to initialize server AES: %v", err)
 	}
-	defer serverAES.ZeroKey()
+	defer serverAES.Close()
 
 	clientAES, err := aes.NewAES256(clientKey)
 	if err != nil {
 		t.Fatalf("Failed to initialize client AES: %v", err)
 	}
-	defer clientAES.ZeroKey()
+	defer clientAES.Close()
 
 	// Test multiple data sizes
 	testCases := []struct {
@@ -135,13 +135,13 @@ func TestPQXDHToAESWithTamper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to initialize server AES: %v", err)
 	}
-	defer serverAES.ZeroKey()
+	defer serverAES.Close()
 
 	clientAES, err := aes.NewAES256(clientKey)
 	if err != nil {
 		t.Fatalf("Failed to initialize client AES: %v", err)
 	}
-	defer clientAES.ZeroKey()
+	defer clientAES.Close()
 
 	// Create test message
 	plaintext := []byte("This message is confidential!")
@@ -250,7 +250,7 @@ func BenchmarkFullProtocol(b *testing.B) {
 		}
 
 		// Clean up
-		serverAES.ZeroKey()
-		clientAES.ZeroKey()
+		serverAES.Close()
+		clientAES.Close()
 	}
 }
