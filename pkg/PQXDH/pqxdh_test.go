@@ -2,21 +2,19 @@ package pqxdh
 
 import (
 	"bytes"
+	"crypto/mlkem"
 	"testing"
-
-	"github.com/cloudflare/circl/dh/x448"
-	"github.com/cloudflare/circl/kem/mlkem/mlkem1024"
 )
 
 // TestKeyGen tests the KeyGen function
 func TestKeyGen(t *testing.T) {
 	// Create some test secrets
-	var ecSecret x448.Key
+	ecSecret := make([]byte, 32) // X25519 shared secret size
 	for i := range ecSecret {
 		ecSecret[i] = byte(i)
 	}
 
-	pqSecret := make([]byte, mlkem1024.SharedKeySize)
+	pqSecret := make([]byte, mlkem.SharedKeySize) // mlkem.SharedSecretSize768
 	for i := range pqSecret {
 		pqSecret[i] = byte(i + 100)
 	}
@@ -62,7 +60,7 @@ func TestNewPQXDHClient(t *testing.T) {
 	client := NewPQXDHClient()
 
 	// Check that all keys were initialized
-	if client.pqPubKey == nil {
+	if client.GetPQPublicKey() == nil {
 		t.Errorf("PQ public key is nil")
 	}
 
@@ -70,7 +68,7 @@ func TestNewPQXDHClient(t *testing.T) {
 		t.Errorf("PQ private key is nil")
 	}
 
-	if client.ecPubKey == nil {
+	if client.GetECPublicKey() == nil {
 		t.Errorf("EC public key is nil")
 	}
 
@@ -84,7 +82,7 @@ func TestNewPQXDHServer(t *testing.T) {
 	server := NewPQXDHServer()
 
 	// Check that all keys were initialized
-	if server.ecPubKey == nil {
+	if server.GetECPublicKey() == nil {
 		t.Errorf("EC public key is nil")
 	}
 
@@ -100,13 +98,13 @@ func TestFullKeyExchange(t *testing.T) {
 	server := NewPQXDHServer()
 
 	// Perform server-side key exchange
-	serverKey, ciphertext, err := ServerKeyExchange(client.pqPubKey, client.ecPubKey, *server)
+	serverKey, ciphertext, err := ServerKeyExchange(client.GetPQPublicKey(), client.GetECPublicKey(), *server)
 	if err != nil {
 		t.Fatalf("Server key exchange failed: %v", err)
 	}
 
 	// Perform client-side key exchange
-	clientKey, err := ClientKeyExchange(server.ecPubKey, ciphertext, *client)
+	clientKey, err := ClientKeyExchange(server.GetECPublicKey(), ciphertext, *client)
 	if err != nil {
 		t.Fatalf("Client key exchange failed: %v", err)
 	}
@@ -131,13 +129,13 @@ func TestClientKeyExchangeWithCorruptCiphertext(t *testing.T) {
 	server := NewPQXDHServer()
 
 	// Create a valid-sized but invalid content ciphertext
-	corruptCiphertext := make([]byte, mlkem1024.CiphertextSize)
+	corruptCiphertext := make([]byte, mlkem.CiphertextSize768)
 	for i := range corruptCiphertext {
 		corruptCiphertext[i] = byte(i % 256)
 	}
 
 	// Try to perform key exchange with invalid ciphertext
-	key, err := ClientKeyExchange(server.ecPubKey, corruptCiphertext, *client)
+	key, err := ClientKeyExchange(server.GetECPublicKey(), corruptCiphertext, *client)
 
 	// If we get here without a panic, just check we get some sort of key
 	// (even though with invalid ciphertext it would be an invalid key)
@@ -157,12 +155,12 @@ func TestMultipleKeyExchanges(t *testing.T) {
 	server2 := NewPQXDHServer()
 
 	// Perform key exchange between client1 and server1
-	server1Key, ciphertext1, err := ServerKeyExchange(client1.pqPubKey, client1.ecPubKey, *server1)
+	server1Key, ciphertext1, err := ServerKeyExchange(client1.GetPQPublicKey(), client1.GetECPublicKey(), *server1)
 	if err != nil {
 		t.Fatalf("Server1 key exchange failed: %v", err)
 	}
 
-	client1Key, err := ClientKeyExchange(server1.ecPubKey, ciphertext1, *client1)
+	client1Key, err := ClientKeyExchange(server1.GetECPublicKey(), ciphertext1, *client1)
 	if err != nil {
 		t.Fatalf("Client1 key exchange failed: %v", err)
 	}
@@ -173,12 +171,12 @@ func TestMultipleKeyExchanges(t *testing.T) {
 	}
 
 	// Perform key exchange between client2 and server2
-	server2Key, ciphertext2, err := ServerKeyExchange(client2.pqPubKey, client2.ecPubKey, *server2)
+	server2Key, ciphertext2, err := ServerKeyExchange(client2.GetPQPublicKey(), client2.GetECPublicKey(), *server2)
 	if err != nil {
 		t.Fatalf("Server2 key exchange failed: %v", err)
 	}
 
-	client2Key, err := ClientKeyExchange(server2.ecPubKey, ciphertext2, *client2)
+	client2Key, err := ClientKeyExchange(server2.GetECPublicKey(), ciphertext2, *client2)
 	if err != nil {
 		t.Fatalf("Client2 key exchange failed: %v", err)
 	}
@@ -204,13 +202,13 @@ func BenchmarkKeyExchange(b *testing.B) {
 		server := NewPQXDHServer()
 
 		// Perform server-side key exchange
-		serverKey, ciphertext, err := ServerKeyExchange(client.pqPubKey, client.ecPubKey, *server)
+		serverKey, ciphertext, err := ServerKeyExchange(client.GetPQPublicKey(), client.GetECPublicKey(), *server)
 		if err != nil {
 			b.Fatalf("Server key exchange failed: %v", err)
 		}
 
 		// Perform client-side key exchange
-		clientKey, err := ClientKeyExchange(server.ecPubKey, ciphertext, *client)
+		clientKey, err := ClientKeyExchange(server.GetECPublicKey(), ciphertext, *client)
 		if err != nil {
 			b.Fatalf("Client key exchange failed: %v", err)
 		}
@@ -225,12 +223,12 @@ func BenchmarkKeyExchange(b *testing.B) {
 // BenchmarkKeyGen measures the performance of just the key generation function
 func BenchmarkKeyGen(b *testing.B) {
 	// Setup test data
-	var ecSecret x448.Key
+	ecSecret := make([]byte, 32) // X25519 shared secret size
 	for i := range ecSecret {
 		ecSecret[i] = byte(i)
 	}
 
-	pqSecret := make([]byte, mlkem1024.SharedKeySize)
+	pqSecret := make([]byte, mlkem.SharedKeySize) // mlkem.SharedSecretSize768
 	for i := range pqSecret {
 		pqSecret[i] = byte(i + 100)
 	}

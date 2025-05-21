@@ -1,46 +1,38 @@
 package pqxdh
 
 import (
+	"crypto/ecdh"
+	"crypto/mlkem"
 	"crypto/rand"
 	"fmt"
-	"io"
-
-	"github.com/cloudflare/circl/dh/x448"
-	"github.com/cloudflare/circl/kem/mlkem/mlkem1024"
 )
 
 // PQXDH is a struct that implements the PQXDH key exchange protocol.
 type PQXDHServer struct {
-	ecPubKey  *x448.Key
-	ecPrivKey *x448.Key
+	ecPrivKey *ecdh.PrivateKey
 }
 
 // NewPQXDHServer creates a new PQXDH instance with the corresponding key pairs.
 func NewPQXDHServer() *PQXDHServer {
-	var ecPubKey, ecPrivKey x448.Key
-
-	// Generate a new X448 key pair.
-	_, _ = io.ReadFull(rand.Reader, ecPrivKey[:])
-	x448.KeyGen(&ecPubKey, &ecPrivKey)
+	ecPrivKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
 
 	return &PQXDHServer{
-		ecPubKey:  &ecPubKey,
-		ecPrivKey: &ecPrivKey,
+		ecPrivKey: ecPrivKey,
 	}
 }
 
 // recieves the public keys from the other peer, generates a shared secret
 // then encapsulates the pq secret to send to the client
-func ServerKeyExchange(clientPQPubKey *mlkem1024.PublicKey, clientECPubKey *x448.Key, self PQXDHServer) (key []byte, ciphertext []byte, err error) {
-	ciphertext = make([]byte, mlkem1024.CiphertextSize)
-	pqSharedSecret := make([]byte, mlkem1024.SharedKeySize)
-	var ecSharedSecret x448.Key
+func ServerKeyExchange(clientPQPubKey *mlkem.EncapsulationKey768, clientECPubKey *ecdh.PublicKey, self PQXDHServer) (key []byte, ciphertext []byte, err error) {
+	ecSharedSecret, err := self.ecPrivKey.ECDH(clientECPubKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ECDH failed: %w", err)
+	}
 
-	// generates pq shared secret and encapsulates the pq secret
-	clientPQPubKey.EncapsulateTo(ciphertext, pqSharedSecret, nil)
-
-	// generates ec shared secret
-	x448.Shared(&ecSharedSecret, self.ecPrivKey, clientECPubKey)
+	pqSharedSecret, ciphertext := clientPQPubKey.Encapsulate()
 
 	// combine the secrets
 	combinedSecret := make([]byte, len(pqSharedSecret)+len(ecSharedSecret[:]))
@@ -56,6 +48,6 @@ func ServerKeyExchange(clientPQPubKey *mlkem1024.PublicKey, clientECPubKey *x448
 }
 
 // GetECPublicKey returns the EC public key of the server.
-func (self *PQXDHServer) GetECPublicKey() *x448.Key {
-	return self.ecPubKey
+func (pqxdh *PQXDHServer) GetECPublicKey() *ecdh.PublicKey {
+	return pqxdh.ecPrivKey.PublicKey()
 }

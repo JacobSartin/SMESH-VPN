@@ -4,12 +4,11 @@ import (
 	"crypto/sha256"
 	"io"
 
-	"github.com/cloudflare/circl/dh/x448"
 	"golang.org/x/crypto/hkdf"
 )
 
 // generate a 256 bit key from the shared secrets
-func KeyGen(ecSecret x448.Key, pqSecret []byte) (key []byte, err error) {
+func KeyGen(ecSecret []byte, pqSecret []byte) (key []byte, err error) {
 	// combine the secrets
 	combinedSecret := make([]byte, len(pqSecret)+len(ecSecret[:]))
 	copy(combinedSecret, pqSecret)
