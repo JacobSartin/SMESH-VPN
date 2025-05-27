@@ -64,3 +64,24 @@ func (pqxdh *PQXDHClient) GetPQPublicKey() *mlkem.EncapsulationKey768 {
 func (pqxdh *PQXDHClient) GetECPublicKey() *ecdh.PublicKey {
 	return pqxdh.ecPrivKey.PublicKey()
 }
+
+// ParsePQPublicKey parses a PQ public key from bytes
+func ParsePQPublicKey(keyBytes []byte) (*mlkem.EncapsulationKey768, error) {
+	key, err := mlkem.NewEncapsulationKey768(keyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse PQ public key: %w", err)
+	}
+
+	return key, nil
+}
+
+// ParseECPublicKey parses an EC public key from bytes
+func ParseECPublicKey(keyBytes []byte) (*ecdh.PublicKey, error) {
+	curve := ecdh.X25519()
+	key, err := curve.NewPublicKey(keyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse EC public key: %w", err)
+	}
+
+	return key, nil
+}
