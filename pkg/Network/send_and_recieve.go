@@ -3,6 +3,7 @@ package network
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 )
 
@@ -27,7 +28,7 @@ func SendWithLen(conn net.Conn, data []byte) error {
 func RecvWithLen(conn net.Conn) ([]byte, error) {
 	// Read the length prefix (2 bytes)
 	lenBuf := make([]byte, 2)
-	_, err := conn.Read(lenBuf)
+	_, err := io.ReadFull(conn, lenBuf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read length prefix: %w", err)
 	}
@@ -37,7 +38,7 @@ func RecvWithLen(conn net.Conn) ([]byte, error) {
 
 	// Read the data based on the length
 	dataBuf := make([]byte, length)
-	_, err = conn.Read(dataBuf)
+	_, err = io.ReadFull(conn, dataBuf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}

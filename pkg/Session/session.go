@@ -206,12 +206,11 @@ func NewSessionFromConn(conn net.Conn, identity *ClientIdentity) (*Session, erro
 }
 
 func connect(remote string) (net.Conn, error) {
-	conn, err := net.Dial("tcp", remote)
+	// TODO consider timeout and threading
+	conn, err := net.DialTimeout("tcp", remote, 30*time.Second)
 	if err != nil {
 		return nil, err
 	}
-
-	// TODO could add a timeout here
 
 	return conn, nil
 }
@@ -297,9 +296,14 @@ func (s *Session) Send(data []byte) error {
 	s.lastActivity = time.Now()
 
 	// TODO improve error handling and check len?
-	_, err = s.connection.Write(encrypted)
-	if err != nil {
-		return err
+	// Ensure all data is written
+	written := 0
+	for written < len(encrypted) {
+		n, err := s.connection.Write(encrypted[written:])
+		if err != nil {
+			return fmt.Errorf("failed to write to connection: %w", err)
+		}
+		written += n
 	}
 	return nil
 }

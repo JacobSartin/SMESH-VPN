@@ -288,7 +288,8 @@ func (sm *SessionManager) notifyEvent(event SessionEvent) {
 		go func(h SessionEventHandler) {
 			defer func() {
 				if r := recover(); r != nil {
-					// Log panic but don't crash the session manager
+					// TODO: Add proper logging
+					// fmt.Printf("Event handler panic: %v\n", r)
 				}
 			}()
 			h(event)
@@ -300,7 +301,8 @@ func (sm *SessionManager) notifyEvent(event SessionEvent) {
 		select {
 		case eventChannel <- event:
 		default:
-			// Channel is full, skip this event to avoid blocking
+			// TODO: Add logging for dropped events
+			// Consider implementing event queuing or larger buffer
 		}
 	}
 }

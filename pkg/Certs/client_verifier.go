@@ -31,8 +31,8 @@ func NewClientCertificateVerifier(caCert x509.Certificate) (*ClientCertificateVe
 	return &ClientCertificateVerifier{
 		caCert:              &caCert,
 		trustedFingerprints: make(map[string][]byte),
-		crl:                 nil,   // No CRL loaded initially
-		enableCRLChecking:   false, // Disabled by default for backward compatibility
+		crl:                 nil,  // No CRL loaded initially
+		enableCRLChecking:   true, // CRL checking enabled by default
 	}, nil
 }
 
@@ -204,17 +204,24 @@ func (cv *ClientCertificateVerifier) HasCRL() bool {
 
 // checkCertificateRevocation checks if a certificate is revoked using the loaded CRL
 func (cv *ClientCertificateVerifier) checkCertificateRevocation(cert *x509.Certificate) (bool, error) {
-	if !cv.enableCRLChecking || cv.crl == nil {
+	cv.mu.RLock()
+	crl := cv.crl
+	enableChecking := cv.enableCRLChecking
+	cv.mu.RUnlock()
+
+	if !enableChecking || crl == nil {
 		// CRL checking disabled or no CRL loaded
 		return false, nil
 	}
+
 	// Check if CRL is still valid
 	now := time.Now()
-	if now.After(cv.crl.NextUpdate) {
+	if now.After(crl.NextUpdate) {
+		cv.mu.Lock()
 		cv.crl = nil // Clear expired CRL
+		cv.mu.Unlock()
 		return false, fmt.Errorf("CRL has expired")
 	}
-
 	// Check if certificate serial number is in the revoked list
 	for _, revokedCert := range cv.crl.RevokedCertificateEntries {
 		if cert.SerialNumber.Cmp(revokedCert.SerialNumber) == 0 {

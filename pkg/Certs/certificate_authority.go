@@ -232,6 +232,9 @@ func (ca *CertificateAuthority) ValidateClientCertificate(cert *x509.Certificate
 
 // GenerateCertificateFingerprint creates a SHA-256 fingerprint of a certificate
 func (ca *CertificateAuthority) GenerateCertificateFingerprint(certDER []byte) ([]byte, error) {
+	if len(certDER) == 0 {
+		return nil, fmt.Errorf("certificate DER data cannot be empty")
+	}
 	hash := sha256.Sum256(certDER)
 	return hash[:], nil
 }
