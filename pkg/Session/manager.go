@@ -1,11 +1,33 @@
 package session
 
 import (
+	"fmt"
+	"net"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// SessionEvent represents different types of session events
+type SessionEvent struct {
+	Type      SessionEventType
+	SessionID uuid.UUID
+	Session   *Session
+	Error     error
+}
+
+// SessionEventType represents the type of session event
+type SessionEventType int
+
+const (
+	SessionEventConnected SessionEventType = iota
+	SessionEventDisconnected
+	SessionEventError
+)
+
+// SessionEventHandler is a function that handles session events
+type SessionEventHandler func(event SessionEvent)
 
 // SessionManager handles multiple active sessions
 type SessionManager struct {
@@ -25,6 +47,10 @@ type SessionManager struct {
 	stopCleanup chan struct{}
 	// clientIdentity is the identity of this client, used across all sessions
 	clientIdentity *ClientIdentity
+	// eventHandlers is a slice of functions to call when session events occur
+	eventHandlers []SessionEventHandler
+	// eventChannel is a channel for session events (optional, can be nil)
+	eventChannel chan SessionEvent
 }
 
 // NewSessionManager creates a new session manager
@@ -73,8 +99,15 @@ func (sm *SessionManager) RemoveSession(sessionID uuid.UUID) {
 		_ = session.Close()
 
 		// Remove from both maps
-		delete(sm.sessionsByPeerID, session.peer.ID)
+		delete(sm.sessionsByPeerID, session.peer.ID.UUID.String())
 		delete(sm.sessions, sessionID.String())
+
+		// Notify about the disconnection
+		sm.notifyEvent(SessionEvent{
+			Type:      SessionEventDisconnected,
+			SessionID: sessionID,
+			Session:   session,
+		})
 	}
 }
 
@@ -148,7 +181,7 @@ func (sm *SessionManager) CleanupIdleSessions() {
 			_ = session.Close()
 
 			// Remove from both maps
-			delete(sm.sessionsByPeerID, session.peer.ID)
+			delete(sm.sessionsByPeerID, session.peer.ID.UUID.String())
 			delete(sm.sessions, id)
 		}
 	}
@@ -194,26 +227,106 @@ func (sm *SessionManager) CreateSession(peerInfo PeerInfo) (*Session, error) {
 
 	// Add the session to the manager
 	sm.sessions[session.sessionID.String()] = session
-	sm.sessionsByPeerID[session.peer.ID] = session
+	sm.sessionsByPeerID[session.peer.ID.UUID.String()] = session
 
 	return session, nil
 }
 
-// EstablishSession creates a new session with a peer and automatically
-// performs key exchange to establish the secure connection
-func (sm *SessionManager) EstablishSession(peerInfo PeerInfo) (*Session, error) {
-	// Create the session
-	session, err := sm.CreateSession(peerInfo)
+func (sm *SessionManager) CreateSessionFromConnection(conn net.Conn) (*Session, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// Create a new session with the identity already injected
+	session, err := NewSessionFromConn(conn, sm.clientIdentity)
 	if err != nil {
+		// Notify about the error
+		sm.notifyEvent(SessionEvent{
+			Type:  SessionEventError,
+			Error: err,
+		})
 		return nil, err
 	}
 
-	// Perform key exchange
-	if err := session.EstablishKeyExchange(); err != nil {
-		// Remove the session if key exchange fails
-		sm.RemoveSession(session.sessionID)
-		return nil, err
-	}
+	// Add the session to the manager
+	sm.sessions[session.sessionID.String()] = session
+	sm.sessionsByPeerID[session.peer.ID.UUID.String()] = session
+
+	// Notify about the new connection
+	sm.notifyEvent(SessionEvent{
+		Type:      SessionEventConnected,
+		SessionID: session.sessionID,
+		Session:   session,
+	})
 
 	return session, nil
+}
+
+// SetEventChannel sets a channel to receive session events
+func (sm *SessionManager) SetEventChannel(ch chan SessionEvent) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.eventChannel = ch
+}
+
+// AddEventHandler adds a callback function to handle session events
+func (sm *SessionManager) AddEventHandler(handler SessionEventHandler) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.eventHandlers = append(sm.eventHandlers, handler)
+}
+
+// notifyEvent sends an event to all registered handlers and the event channel
+func (sm *SessionManager) notifyEvent(event SessionEvent) {
+	sm.mu.RLock()
+	handlers := make([]SessionEventHandler, len(sm.eventHandlers))
+	copy(handlers, sm.eventHandlers)
+	eventChannel := sm.eventChannel
+	sm.mu.RUnlock()
+
+	// Call all registered handlers
+	for _, handler := range handlers {
+		go func(h SessionEventHandler) {
+			defer func() {
+				if r := recover(); r != nil {
+					// Log panic but don't crash the session manager
+				}
+			}()
+			h(event)
+		}(handler)
+	}
+
+	// Send to event channel if set
+	if eventChannel != nil {
+		select {
+		case eventChannel <- event:
+		default:
+			// Channel is full, skip this event to avoid blocking
+		}
+	}
+}
+
+// ListenForNewConnections starts listening for new connections and creates sessions
+// This function blocks and should typically be run in a goroutine
+func (sm *SessionManager) ListenForNewConnections(listener net.Listener) error {
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			// Notify about the accept error
+			sm.notifyEvent(SessionEvent{
+				Type:  SessionEventError,
+				Error: fmt.Errorf("failed to accept connection: %w", err),
+			})
+			return err // Accept failed, return error
+		}
+
+		// Create a new session from the accepted connection
+		// This runs in the current goroutine - each connection is handled synchronously
+		// If you want concurrent handling, you could wrap this in a goroutine
+		_, err = sm.CreateSessionFromConnection(conn)
+		if err != nil {
+			// Error is already notified in CreateSessionFromConnection
+			// Continue to accept new connections despite this error
+			continue
+		}
+	}
 }

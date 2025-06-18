@@ -1,11 +1,13 @@
 package session
 
 import (
+	"crypto/ed25519"
 	"crypto/x509"
 	"errors"
 	"sync"
 	"time"
 
+	certs "github.com/JacobSartin/SMESH-VPN/pkg/Certs"
 	"github.com/google/uuid"
 )
 
@@ -22,11 +24,13 @@ type ClientIdentity struct {
 	// mutex for synchronized access to identity data
 	mu sync.RWMutex
 	// ID is a unique identifier for this client
-	ID string
+	ID uuid.NullUUID
 	// Certificate is the client's certificate for authentication
 	Certificate *x509.Certificate // PrivateKey is the client's private key corresponding to the certificate
 	// This is sensitive information that should be protected
-	privateKey interface{}
+	PrivateKey ed25519.PrivateKey
+	// certificate verifier
+	Verifier *certs.ClientCertificateVerifier // Used to verify peer certificates
 	// CreatedAt tracks when this identity was created
 	CreatedAt time.Time
 	// ExpiresAt tracks when this identity expires (typically from certificate)
@@ -42,7 +46,7 @@ type ClientIdentity struct {
 // NewClientIdentity creates a new client identity
 func NewClientIdentity() *ClientIdentity {
 	return &ClientIdentity{
-		ID:         uuid.New().String(),
+		ID:         uuid.NullUUID{Valid: false},
 		CreatedAt:  time.Now(),
 		DeviceInfo: make(map[string]string),
 		Metadata:   make(map[string]interface{}),
@@ -64,7 +68,12 @@ func (c *ClientIdentity) LoadCertificate(certData []byte) error {
 
 	// If certificate has a subject with CommonName, use it as ID
 	if cert.Subject.CommonName != "" {
-		c.ID = cert.Subject.CommonName
+		id, err := uuid.Parse(cert.Subject.CommonName)
+		if err == nil {
+			c.ID = uuid.NullUUID{UUID: id, Valid: true}
+		} else {
+			c.ID = uuid.NullUUID{Valid: false} // Reset ID if parsing fails
+		}
 	}
 
 	// Set expiration time from certificate
@@ -115,7 +124,7 @@ func (c *ClientIdentity) GetPeerInfo() (PeerInfo, error) {
 
 	// If we have a certificate, include it
 	if c.Certificate != nil {
-		peer.Certificate = c.Certificate.Raw
+		peer.Certificate = *c.Certificate
 	}
 
 	return peer, nil
@@ -127,6 +136,6 @@ func (c *ClientIdentity) ClearSensitiveData() {
 	defer c.mu.Unlock()
 
 	// Clear the private key
-	c.privateKey = nil
+	c.PrivateKey = nil
 
 }
