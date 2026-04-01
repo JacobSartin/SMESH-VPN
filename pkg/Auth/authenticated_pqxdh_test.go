@@ -80,7 +80,11 @@ func TestAuthenticatedPQXDHHandshake(t *testing.T) {
 	}
 
 	// Create authenticated PQXDH instances
-	client := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	if err != nil {
+		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
+	}
+
 	server, err := NewAuthenticatedPQXDHServer(serverCert, serverPrivKey, serverVerifier)
 	if err != nil {
 		t.Fatalf("Failed to create authenticated PQXDH server: %v", err)
@@ -175,7 +179,11 @@ func TestAuthenticatedHandshakeWithRevokedCertificate(t *testing.T) {
 	serverVerifier.EnableCRLChecking(true)
 
 	// Create authenticated PQXDH instances with pre-configured verifiers
-	client := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	if err != nil {
+		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
+	}
+
 	server, err := NewAuthenticatedPQXDHServer(serverCert, serverPrivKey, serverVerifier)
 	if err != nil {
 		t.Fatalf("Failed to create authenticated PQXDH server: %v", err)
@@ -243,7 +251,11 @@ func TestAuthenticatedHandshakeWithInvalidSignature(t *testing.T) {
 	}
 
 	// Create authenticated PQXDH instances with wrong client key
-	client := NewAuthenticatedPQXDHClient(clientCert, wrongPrivKey, clientVerifier, uuid.NullUUID{})
+	client, err := NewAuthenticatedPQXDHClient(clientCert, wrongPrivKey, clientVerifier, uuid.NullUUID{})
+	if err != nil {
+		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
+	}
+
 	server, err := NewAuthenticatedPQXDHServer(serverCert, serverPrivKey, serverVerifier)
 	if err != nil {
 		t.Fatalf("Failed to create authenticated PQXDH server: %v", err)
@@ -304,7 +316,10 @@ func TestAuthenticatedHandshakeReplayProtection(t *testing.T) {
 	}
 
 	// Create authenticated PQXDH instances
-	client := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	if err != nil {
+		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
+	}
 	server, err := NewAuthenticatedPQXDHServer(serverCert, serverPrivKey, serverVerifier)
 	if err != nil {
 		t.Fatalf("Failed to create authenticated PQXDH server: %v", err)
@@ -380,7 +395,10 @@ func BenchmarkAuthenticatedHandshake(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		client := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+		client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+		if err != nil {
+			b.Fatalf("Failed to create authenticated PQXDH client: %v", err)
+		}
 		server, err := NewAuthenticatedPQXDHServer(serverCert, serverPrivKey, serverVerifier)
 		if err != nil {
 			b.Fatalf("Failed to create authenticated PQXDH server: %v", err)
@@ -484,7 +502,10 @@ func TestInvalidSignatureWrongKey(t *testing.T) {
 	}
 
 	// Create authenticated PQXDH instances
-	client := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	if err != nil {
+		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
+	}
 	server, err := NewAuthenticatedPQXDHServer(serverCert, serverPrivKey, serverVerifier)
 	if err != nil {
 		t.Fatalf("Failed to create authenticated PQXDH server: %v", err)
@@ -562,7 +583,10 @@ func TestValidSignatureTamperedMessage(t *testing.T) {
 	}
 
 	// Create authenticated PQXDH instances
-	client := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	if err != nil {
+		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
+	}
 	server, err := NewAuthenticatedPQXDHServer(serverCert, serverPrivKey, serverVerifier)
 	if err != nil {
 		t.Fatalf("Failed to create authenticated PQXDH server: %v", err)
@@ -633,8 +657,14 @@ func TestBinary(t *testing.T) {
 		t.Fatalf("Failed to generate server certificate: %v", err)
 	}
 
-	client := NewAuthenticatedPQXDHClient(clientCert, clientKey, verifier, uuid.NullUUID{})
-	server, _ := NewAuthenticatedPQXDHServer(serverCert, serverKey, verifier)
+	client, err := NewAuthenticatedPQXDHClient(clientCert, clientKey, verifier, uuid.NullUUID{})
+	if err != nil {
+		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
+	}
+	server, err := NewAuthenticatedPQXDHServer(serverCert, serverKey, verifier)
+	if err != nil {
+		t.Fatalf("Failed to create authenticated PQXDH server: %v", err)
+	}
 
 	hello, err := client.CreateClientHello()
 	if err != nil {

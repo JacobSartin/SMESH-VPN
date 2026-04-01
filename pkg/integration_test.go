@@ -16,8 +16,15 @@ import (
 // 3. Encrypting data with one peer and decrypting with the other
 func TestPQXDHToAESIntegration(t *testing.T) {
 	// Create client and server instances
-	client := pqxdh.NewPQXDHClient()
-	server := pqxdh.NewPQXDHServer()
+	client, err := pqxdh.NewPQXDHClient()
+	if err != nil {
+		t.Fatalf("Failed to create PQXDH client: %v", err)
+	}
+
+	server, err := pqxdh.NewPQXDHServer()
+	if err != nil {
+		t.Fatalf("Failed to create PQXDH server: %v", err)
+	}
 
 	// Perform server-side key exchange
 	serverKey, ciphertext, err := pqxdh.ServerKeyExchange(client.GetPQPublicKey(), client.GetECPublicKey(), *server)
@@ -116,8 +123,15 @@ func TestPQXDHToAESIntegration(t *testing.T) {
 // TestPQXDHToAESWithTamper tests what happens when messages are tampered with
 func TestPQXDHToAESWithTamper(t *testing.T) {
 	// Create client and server instances
-	client := pqxdh.NewPQXDHClient()
-	server := pqxdh.NewPQXDHServer()
+	client, err := pqxdh.NewPQXDHClient()
+	if err != nil {
+		t.Fatalf("Failed to create PQXDH client: %v", err)
+	}
+
+	server, err := pqxdh.NewPQXDHServer()
+	if err != nil {
+		t.Fatalf("Failed to create PQXDH server: %v", err)
+	}
 
 	// Perform the key exchange
 	serverKey, ciphertext, err := pqxdh.ServerKeyExchange(client.GetPQPublicKey(), client.GetECPublicKey(), *server)
@@ -173,8 +187,14 @@ func BenchmarkPQXDHKeyExchange(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		// Create client and server instances
-		client := pqxdh.NewPQXDHClient()
-		server := pqxdh.NewPQXDHServer()
+		client, err := pqxdh.NewPQXDHClient()
+		if err != nil {
+			b.Fatalf("Failed to create PQXDH client: %v", err)
+		}
+		server, err := pqxdh.NewPQXDHServer()
+		if err != nil {
+			b.Fatalf("Failed to create PQXDH server: %v", err)
+		}
 
 		// Perform key exchange
 		serverKey, ciphertext, err := pqxdh.ServerKeyExchange(client.GetPQPublicKey(), client.GetECPublicKey(), *server)
@@ -207,8 +227,14 @@ func BenchmarkFullProtocol(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		// Create client and server instances
-		client := pqxdh.NewPQXDHClient()
-		server := pqxdh.NewPQXDHServer()
+		client, err := pqxdh.NewPQXDHClient()
+		if err != nil {
+			b.Fatalf("Failed to create PQXDH client: %v", err)
+		}
+		server, err := pqxdh.NewPQXDHServer()
+		if err != nil {
+			b.Fatalf("Failed to create PQXDH server: %v", err)
+		}
 
 		// Perform key exchange
 		serverKey, ciphertext, err := pqxdh.ServerKeyExchange(client.GetPQPublicKey(), client.GetECPublicKey(), *server)

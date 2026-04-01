@@ -69,20 +69,27 @@ func (msg *AuthenticatedHandshakeHello) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// signs the handshake hello message with the provided private key
-func (msg *AuthenticatedHandshakeHello) Sign(privateKey ed25519.PrivateKey) {
+// Sign signs the handshake hello message with the provided private key.
+func (msg *AuthenticatedHandshakeHello) Sign(privateKey ed25519.PrivateKey) error {
 	signatureData := append(msg.PQPublicKey, msg.ECPublicKey...)
 	signatureData = append(signatureData, msg.Certificate...)
-	timestampBytes, _ := msg.Timestamp.MarshalBinary()
+	timestampBytes, err := msg.Timestamp.MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("failed to marshal timestamp: %w", err)
+	}
 	signatureData = append(signatureData, timestampBytes...)
 
 	// Include ID in signature if present
 	if msg.ID.Valid {
-		idBytes, _ := msg.ID.UUID.MarshalBinary()
+		idBytes, err := msg.ID.UUID.MarshalBinary()
+		if err != nil {
+			return fmt.Errorf("failed to marshal client ID: %w", err)
+		}
 		signatureData = append(signatureData, idBytes...)
 	}
 
 	msg.Signature = ed25519.Sign(privateKey, signatureData)
+	return nil
 }
 
 // Verify verifies the signature of the handshake hello message
@@ -96,12 +103,18 @@ func (msg *AuthenticatedHandshakeHello) Verify() error {
 	// Verify the signature using the public key from the certificate
 	signatureData := append(msg.PQPublicKey, msg.ECPublicKey...)
 	signatureData = append(signatureData, msg.Certificate...)
-	timestampBytes, _ := msg.Timestamp.MarshalBinary()
+	timestampBytes, err := msg.Timestamp.MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("failed to marshal timestamp: %w", err)
+	}
 	signatureData = append(signatureData, timestampBytes...)
 
 	// Include ID in signature if present
 	if msg.ID.Valid {
-		idBytes, _ := msg.ID.UUID.MarshalBinary()
+		idBytes, err := msg.ID.UUID.MarshalBinary()
+		if err != nil {
+			return fmt.Errorf("failed to marshal client ID: %w", err)
+		}
 		signatureData = append(signatureData, idBytes...)
 	}
 
@@ -110,7 +123,12 @@ func (msg *AuthenticatedHandshakeHello) Verify() error {
 		return ErrHandshakeTimeout
 	}
 
-	if !ed25519.Verify(cert.PublicKey.(ed25519.PublicKey), signatureData, msg.Signature) {
+	pubKey, ok := cert.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return ErrInvalidCertificate
+	}
+
+	if !ed25519.Verify(pubKey, signatureData, msg.Signature) {
 		return ErrInvalidSignature
 	}
 

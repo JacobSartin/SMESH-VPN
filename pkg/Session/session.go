@@ -35,6 +35,7 @@ var (
 	ErrAuthFailed        = errors.New("peer authentication failed")
 	ErrKeyExchangeFailed = errors.New("key exchange failed")
 	ErrSessionTimeout    = errors.New("session timed out")
+	ErrInvalidIdentity   = errors.New("invalid client identity")
 )
 
 // PeerInfo contains information about a peer in the VPN mesh
@@ -120,6 +121,10 @@ func NewSession(peer PeerInfo, identity *ClientIdentity) (*Session, error) {
 func NewSessionFromConn(conn net.Conn, identity *ClientIdentity) (*Session, error) {
 	if conn == nil {
 		return nil, errors.New("connection cannot be nil")
+	}
+
+	if identity == nil || identity.Certificate == nil || len(identity.PrivateKey) == 0 || identity.Verifier == nil {
+		return nil, ErrInvalidIdentity
 	}
 
 	// Read the peer's hello message
@@ -224,7 +229,14 @@ func (s *Session) EstablishKeyExchange(identity *ClientIdentity) error {
 		return ErrSessionClosed
 	}
 
-	exchange := auth.NewAuthenticatedPQXDHClient(identity.Certificate, identity.PrivateKey, identity.Verifier, identity.ID)
+	if identity == nil || identity.Certificate == nil || len(identity.PrivateKey) == 0 || identity.Verifier == nil {
+		return ErrInvalidIdentity
+	}
+
+	exchange, err := auth.NewAuthenticatedPQXDHClient(identity.Certificate, identity.PrivateKey, identity.Verifier, identity.ID)
+	if err != nil {
+		return fmt.Errorf("failed to create authenticated PQXDH client: %w", err)
+	}
 	hello, err := exchange.CreateClientHello()
 	if err != nil {
 		return err
@@ -272,67 +284,84 @@ func (s *Session) EstablishKeyExchange(identity *ClientIdentity) error {
 // Send encrypts and sends data to the peer
 func (s *Session) Send(data []byte) error {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	if s.closed {
+		s.mu.RUnlock()
 		return ErrSessionClosed
 	}
 
 	if s.status != StatusEstablished {
+		s.mu.RUnlock()
 		return errors.New("session not established")
 	}
 
 	if s.cipher == nil {
+		s.mu.RUnlock()
 		return errors.New("encryption not initialized")
 	}
 
+	cipher := s.cipher
+	conn := s.connection
+	s.mu.RUnlock()
+
+	if conn == nil {
+		return ErrSessionClosed
+	}
+
 	// Encrypt the data
-	encrypted, err := s.cipher.Encrypt(data)
+	encrypted, err := cipher.Encrypt(data)
 	if err != nil {
 		return err
 	}
-
-	// Update last activity
-	s.lastActivity = time.Now()
 
 	// TODO improve error handling and check len?
 	// Ensure all data is written
 	written := 0
 	for written < len(encrypted) {
-		n, err := s.connection.Write(encrypted[written:])
+		n, err := conn.Write(encrypted[written:])
 		if err != nil {
 			return fmt.Errorf("failed to write to connection: %w", err)
 		}
 		written += n
 	}
+
+	s.mu.Lock()
+	s.lastActivity = time.Now()
+	s.mu.Unlock()
+
 	return nil
 }
 
 // Receive decrypts data received from the peer
 func (s *Session) Receive(encryptedData []byte) ([]byte, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	if s.closed {
+		s.mu.RUnlock()
 		return nil, ErrSessionClosed
 	}
 
 	if s.status != StatusEstablished {
+		s.mu.RUnlock()
 		return nil, errors.New("session not established")
 	}
 
 	if s.cipher == nil {
+		s.mu.RUnlock()
 		return nil, errors.New("encryption not initialized")
 	}
 
+	cipher := s.cipher
+	s.mu.RUnlock()
+
 	// Decrypt the data
-	decrypted, err := s.cipher.Decrypt(encryptedData)
+	decrypted, err := cipher.Decrypt(encryptedData)
 	if err != nil {
 		return nil, err
 	}
 
 	// Update last activity
+	s.mu.Lock()
 	s.lastActivity = time.Now()
+	s.mu.Unlock()
 
 	return decrypted, nil
 }
@@ -382,6 +411,13 @@ func (s *Session) PeerInfo() PeerInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.peer
+}
+
+// SessionID returns the unique ID for this session.
+func (s *Session) SessionID() uuid.UUID {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.sessionID
 }
 
 // IdleTime returns how long the session has been idle

@@ -147,8 +147,9 @@ func (ca *CertificateAuthority) IssueClientCertificate(clientPubKey ed25519.Publ
 		return nil, ErrCertificateAlreadyExists
 	}
 
-	// Generate a unique serial number
-	serialNumber := big.NewInt(time.Now().UnixNano())
+	// Use a monotonic serial counter to guarantee uniqueness.
+	serialNumber := new(big.Int).Set(ca.nextSerialNumber)
+	ca.nextSerialNumber = new(big.Int).Add(ca.nextSerialNumber, big.NewInt(1))
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{

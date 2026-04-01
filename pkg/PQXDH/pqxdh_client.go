@@ -15,22 +15,22 @@ type PQXDHClient struct {
 	ecPrivKey *ecdh.PrivateKey
 }
 
-// NewPQXDH creates a new PQXDH instance with the corresponding key pairs.
-func NewPQXDHClient() *PQXDHClient {
+// NewPQXDHClient creates a new PQXDH instance with the corresponding key pairs.
+func NewPQXDHClient() (*PQXDHClient, error) {
 	ecPrivKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to generate EC key: %w", err)
 	}
 
 	pqPrivKey, err := mlkem.GenerateKey768()
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to generate PQ key: %w", err)
 	}
 
 	return &PQXDHClient{
 		pqPrivKey: pqPrivKey,
 		ecPrivKey: ecPrivKey,
-	}
+	}, nil
 }
 
 // recieves the ciphertext and classical public key, generates a shared secret

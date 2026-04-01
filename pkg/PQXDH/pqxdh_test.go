@@ -57,7 +57,10 @@ func TestKeyGen(t *testing.T) {
 
 // TestNewPQXDHClient tests that NewPQXDHClient creates a valid client instance
 func TestNewPQXDHClient(t *testing.T) {
-	client := NewPQXDHClient()
+	client, err := NewPQXDHClient()
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
 
 	// Check that all keys were initialized
 	if client.GetPQPublicKey() == nil {
@@ -79,7 +82,10 @@ func TestNewPQXDHClient(t *testing.T) {
 
 // TestNewPQXDHServer tests that NewPQXDHServer creates a valid server instance
 func TestNewPQXDHServer(t *testing.T) {
-	server := NewPQXDHServer()
+	server, err := NewPQXDHServer()
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
 
 	// Check that all keys were initialized
 	if server.GetECPublicKey() == nil {
@@ -94,8 +100,14 @@ func TestNewPQXDHServer(t *testing.T) {
 // TestFullKeyExchange tests the full key exchange protocol between client and server
 func TestFullKeyExchange(t *testing.T) {
 	// Create client and server instances
-	client := NewPQXDHClient()
-	server := NewPQXDHServer()
+	client, err := NewPQXDHClient()
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	server, err := NewPQXDHServer()
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
 
 	// Perform server-side key exchange
 	serverKey, ciphertext, err := ServerKeyExchange(client.GetPQPublicKey(), client.GetECPublicKey(), *server)
@@ -125,8 +137,14 @@ func TestClientKeyExchangeWithCorruptCiphertext(t *testing.T) {
 		}
 	}()
 
-	client := NewPQXDHClient()
-	server := NewPQXDHServer()
+	client, err := NewPQXDHClient()
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	server, err := NewPQXDHServer()
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
 
 	// Create a valid-sized but invalid content ciphertext
 	corruptCiphertext := make([]byte, mlkem.CiphertextSize768)
@@ -149,10 +167,22 @@ func TestClientKeyExchangeWithCorruptCiphertext(t *testing.T) {
 // TestMultipleKeyExchanges tests multiple key exchanges between different pairs
 func TestMultipleKeyExchanges(t *testing.T) {
 	// Create multiple clients and servers
-	client1 := NewPQXDHClient()
-	client2 := NewPQXDHClient()
-	server1 := NewPQXDHServer()
-	server2 := NewPQXDHServer()
+	client1, err := NewPQXDHClient()
+	if err != nil {
+		t.Fatalf("Failed to create client1: %v", err)
+	}
+	client2, err := NewPQXDHClient()
+	if err != nil {
+		t.Fatalf("Failed to create client2: %v", err)
+	}
+	server1, err := NewPQXDHServer()
+	if err != nil {
+		t.Fatalf("Failed to create server1: %v", err)
+	}
+	server2, err := NewPQXDHServer()
+	if err != nil {
+		t.Fatalf("Failed to create server2: %v", err)
+	}
 
 	// Perform key exchange between client1 and server1
 	server1Key, ciphertext1, err := ServerKeyExchange(client1.GetPQPublicKey(), client1.GetECPublicKey(), *server1)
@@ -198,8 +228,14 @@ func BenchmarkKeyExchange(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		// Create client and server
-		client := NewPQXDHClient()
-		server := NewPQXDHServer()
+		client, err := NewPQXDHClient()
+		if err != nil {
+			b.Fatalf("Failed to create client: %v", err)
+		}
+		server, err := NewPQXDHServer()
+		if err != nil {
+			b.Fatalf("Failed to create server: %v", err)
+		}
 
 		// Perform server-side key exchange
 		serverKey, ciphertext, err := ServerKeyExchange(client.GetPQPublicKey(), client.GetECPublicKey(), *server)

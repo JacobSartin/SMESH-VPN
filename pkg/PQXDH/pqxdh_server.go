@@ -13,15 +13,15 @@ type PQXDHServer struct {
 }
 
 // NewPQXDHServer creates a new PQXDH instance with the corresponding key pairs.
-func NewPQXDHServer() *PQXDHServer {
+func NewPQXDHServer() (*PQXDHServer, error) {
 	ecPrivKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to generate EC key: %w", err)
 	}
 
 	return &PQXDHServer{
 		ecPrivKey: ecPrivKey,
-	}
+	}, nil
 }
 
 // recieves the public keys from the other peer, generates a shared secret

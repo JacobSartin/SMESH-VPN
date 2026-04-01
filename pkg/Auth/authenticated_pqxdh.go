@@ -43,21 +43,31 @@ type AuthenticatedPQXDHServer struct {
 
 // NewAuthenticatedPQXDHClient creates a new authenticated PQXDH client
 // privKey should be the private key corresponding to the server's certificate
-func NewAuthenticatedPQXDHClient(cert *x509.Certificate, privKey ed25519.PrivateKey, verifier *certs.ClientCertificateVerifier, id uuid.NullUUID) *AuthenticatedPQXDHClient {
+func NewAuthenticatedPQXDHClient(cert *x509.Certificate, privKey ed25519.PrivateKey, verifier *certs.ClientCertificateVerifier, id uuid.NullUUID) (*AuthenticatedPQXDHClient, error) {
+	pqxdhClient, err := pqxdh.NewPQXDHClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create PQXDH client: %w", err)
+	}
+
 	return &AuthenticatedPQXDHClient{
-		pqxdhClient: pqxdh.NewPQXDHClient(),
+		pqxdhClient: pqxdhClient,
 		certificate: cert,
 		privateKey:  privKey,
 		verifier:    verifier,
 		id:          id,
-	}
+	}, nil
 }
 
 // NewAuthenticatedPQXDHServer creates a new authenticated PQXDH server
 // privKey should be the private key corresponding to the server's certificate
 func NewAuthenticatedPQXDHServer(cert *x509.Certificate, privKey ed25519.PrivateKey, verifier *certs.ClientCertificateVerifier) (*AuthenticatedPQXDHServer, error) {
+	pqxdhServer, err := pqxdh.NewPQXDHServer()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create PQXDH server: %w", err)
+	}
+
 	return &AuthenticatedPQXDHServer{
-		pqxdhServer: pqxdh.NewPQXDHServer(),
+		pqxdhServer: pqxdhServer,
 		certificate: cert,
 		privateKey:  privKey,
 		verifier:    verifier,
@@ -84,7 +94,9 @@ func (ac *AuthenticatedPQXDHClient) CreateClientHello() (*AuthenticatedHandshake
 	}
 
 	// Sign the message using the message's Sign method
-	msg.Sign(ac.privateKey)
+	if err := msg.Sign(ac.privateKey); err != nil {
+		return nil, fmt.Errorf("failed to sign client hello: %w", err)
+	}
 
 	return msg, nil
 }
@@ -129,7 +141,9 @@ func (as *AuthenticatedPQXDHServer) ProcessClientHello(clientHello *Authenticate
 	}
 
 	// Sign server response using the message's Sign method
-	response.Sign(as.privateKey)
+	if err := response.Sign(as.privateKey); err != nil {
+		return nil, nil, fmt.Errorf("failed to sign server response: %w", err)
+	}
 
 	return response, sharedKey, nil
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"time"
 
 	session "github.com/JacobSartin/SMESH-VPN/pkg/Session"
@@ -42,6 +43,10 @@ func main() {
 	// Connect to server
 	serverAddr := "localhost:8080"
 	fmt.Printf("Connecting to server at %s...\n", serverAddr)
+	tcpAddr, err := net.ResolveTCPAddr("tcp", serverAddr)
+	if err != nil {
+		log.Fatalf("Failed to resolve server address: %v", err)
+	}
 
 	// Create peer info for the server
 	serverPeerInfo := session.PeerInfo{
@@ -49,7 +54,7 @@ func main() {
 			UUID:  uuid.New(),
 			Valid: true,
 		},
-		// Address will be set when we establish the connection
+		Address:  tcpAddr,
 		LastSeen: time.Now(),
 	}
 
