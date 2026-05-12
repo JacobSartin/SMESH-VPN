@@ -92,37 +92,42 @@ func (sm *SessionManager) GetSessionByPeerID(peerID string) (*Session, bool) {
 // RemoveSession removes a session from the manager
 func (sm *SessionManager) RemoveSession(sessionID uuid.UUID) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	if session, exists := sm.sessions[sessionID.String()]; exists {
-		// Close the session
-		_ = session.Close()
-
-		// Remove from both maps
+	session, exists := sm.sessions[sessionID.String()]
+	if exists {
 		delete(sm.sessionsByPeerID, session.peer.ID.UUID.String())
 		delete(sm.sessions, sessionID.String())
-
-		// Notify about the disconnection
-		sm.notifyEvent(SessionEvent{
-			Type:      SessionEventDisconnected,
-			SessionID: sessionID,
-			Session:   session,
-		})
 	}
+	sm.mu.Unlock()
+
+	if !exists {
+		return
+	}
+
+	_ = session.Close()
+
+	sm.notifyEvent(SessionEvent{
+		Type:      SessionEventDisconnected,
+		SessionID: sessionID,
+		Session:   session,
+	})
 }
 
 // CloseAll closes all active sessions
 func (sm *SessionManager) CloseAll() {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
+	sessions := make([]*Session, 0, len(sm.sessions))
 	for _, session := range sm.sessions {
-		_ = session.Close()
+		sessions = append(sessions, session)
 	}
 
 	// Clear the maps
 	sm.sessions = make(map[string]*Session)
 	sm.sessionsByPeerID = make(map[string]*Session)
+	sm.mu.Unlock()
+
+	for _, session := range sessions {
+		_ = session.Close()
+	}
 }
 
 // Count returns the number of active sessions
@@ -173,17 +178,19 @@ func (sm *SessionManager) cleanupRoutine() {
 // cleanupIdleSessions removes sessions that have been idle for too long
 func (sm *SessionManager) CleanupIdleSessions() {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	idleSessions := make([]*Session, 0)
 
 	for id, session := range sm.sessions {
 		if session.IdleTime() > sm.maxIdleTime {
-			// Close the session
-			_ = session.Close()
-
-			// Remove from both maps
 			delete(sm.sessionsByPeerID, session.peer.ID.UUID.String())
 			delete(sm.sessions, id)
+			idleSessions = append(idleSessions, session)
 		}
+	}
+	sm.mu.Unlock()
+
+	for _, session := range idleSessions {
+		_ = session.Close()
 	}
 }
 
@@ -215,31 +222,34 @@ func (sm *SessionManager) rekeyAgingSessions() {
 // CreateSession creates a new session with a peer using the client's identity
 // This is the recommended way to create a session as it handles session setup internally
 func (sm *SessionManager) CreateSession(peerInfo PeerInfo) (*Session, error) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	sm.mu.RLock()
+	identity := sm.clientIdentity
+	sm.mu.RUnlock()
 
-	// Create a new session with the identity already injected
-	// This uses the specific constructor that properly sets up the session with identity
-	session, err := NewSession(peerInfo, sm.clientIdentity)
+	session, err := NewSession(peerInfo, identity)
 	if err != nil {
 		return nil, err
 	}
 
+	sm.mu.Lock()
 	// Add the session to the manager
 	sm.sessions[session.sessionID.String()] = session
 	sm.sessionsByPeerID[session.peer.ID.UUID.String()] = session
+	sm.mu.Unlock()
 
 	return session, nil
 }
 
 func (sm *SessionManager) CreateSessionFromConnection(conn net.Conn) (*Session, error) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	sm.mu.RLock()
+	identity := sm.clientIdentity
+	sm.mu.RUnlock()
 
-	// Create a new session with the identity already injected
-	session, err := NewSessionFromConn(conn, sm.clientIdentity)
+	session, err := NewSessionFromConn(conn, identity)
 	if err != nil {
-		// Notify about the error
+		if conn != nil {
+			_ = conn.Close()
+		}
 		sm.notifyEvent(SessionEvent{
 			Type:  SessionEventError,
 			Error: err,
@@ -247,9 +257,11 @@ func (sm *SessionManager) CreateSessionFromConnection(conn net.Conn) (*Session, 
 		return nil, err
 	}
 
+	sm.mu.Lock()
 	// Add the session to the manager
 	sm.sessions[session.sessionID.String()] = session
 	sm.sessionsByPeerID[session.peer.ID.UUID.String()] = session
+	sm.mu.Unlock()
 
 	// Notify about the new connection
 	sm.notifyEvent(SessionEvent{
@@ -321,14 +333,8 @@ func (sm *SessionManager) ListenForNewConnections(listener net.Listener) error {
 			return err // Accept failed, return error
 		}
 
-		// Create a new session from the accepted connection
-		// This runs in the current goroutine - each connection is handled synchronously
-		// If you want concurrent handling, you could wrap this in a goroutine
-		_, err = sm.CreateSessionFromConnection(conn)
-		if err != nil {
-			// Error is already notified in CreateSessionFromConnection
-			// Continue to accept new connections despite this error
-			continue
-		}
+		go func(conn net.Conn) {
+			_, _ = sm.CreateSessionFromConnection(conn)
+		}(conn)
 	}
 }
