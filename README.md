@@ -5,12 +5,11 @@
 ╚════██║██║╚██╔╝██║██╔══╝  ╚════██║██╔══██║    ╚██╗ ██╔╝██╔═══╝ ██║╚██╗██║
 ███████║██║ ╚═╝ ██║███████╗███████║██║  ██║     ╚████╔╝ ██║     ██║ ╚████║
 ╚══════╝╚═╝     ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝      ╚═══╝  ╚═╝     ╚═╝  ╚═══╝
-
-Post-Quantum Secure Mesh VPN Client
------------------------------------
 ```
 
-A secure mesh VPN with Post-Quantum Cryptography.
+# Post-Quantum Mesh VPN Client
+
+A mesh VPN with Post-Quantum Cryptography.
 
 ## Features
 
@@ -23,29 +22,29 @@ A secure mesh VPN with Post-Quantum Cryptography.
 
 ## Requirements
 
-- Go 1.20+ (developed with Go 1.24)
+- Go 1.20+
 - For TUN/TAP interface: Appropriate drivers for your OS
 
 ## Installation
 
 1. Clone the repository:
 
-```bash
-git clone https://github.com/JacobSartin/SMESH-VPN.git
-cd SMESH-VPN
-```
+   ```bash
+   git clone https://github.com/JacobSartin/SMESH-VPN.git
+   cd SMESH-VPN
+   ```
 
 2. Build the binaries:
 
-```bash
-# If using Windows with WSL for Make
-wsl make
+   ```bash
+   # If using Windows with WSL for Make
+   wsl make
 
-# If using native Make
-make
-```
+   # If using native Make
+   make
+   ```
 
-This will create both client and server binaries for Windows and Linux in the `bin/` directory.
+   This will create both client and server binaries for Windows and Linux in the `bin/` directory.
 
 ## Certificate Setup
 
