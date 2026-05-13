@@ -9,19 +9,25 @@ import (
 
 // SendWithLen sends data over a net.Conn with a big-endian length prefix.
 func SendWithLen(conn net.Conn, data []byte) error {
-	len := len(data)
-	if len < 0 || len > 65535 {
-		return fmt.Errorf("length must be between 0 and 65535, got %d", len)
+	if len(data) > 65535 {
+		return fmt.Errorf("length must be at most 65535, got %d", len(data))
 	}
 
 	// Create a buffer to hold the length prefix and data
-	buf := make([]byte, 2+len)
-	binary.BigEndian.PutUint16(buf[:2], uint16(len))
+	buf := make([]byte, 2+len(data))
+	binary.BigEndian.PutUint16(buf[:2], uint16(len(data)))
 	copy(buf[2:], data)
 
-	// Send the buffer over the connection
-	_, err := conn.Write(buf)
-	return err
+	written := 0
+	for written < len(buf) {
+		n, err := conn.Write(buf[written:])
+		if err != nil {
+			return fmt.Errorf("failed to write data: %w", err)
+		}
+		written += n
+	}
+
+	return nil
 }
 
 // RecvWithLen receives data from a net.Conn with a big-endian length prefix.
