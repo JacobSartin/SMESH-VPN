@@ -31,6 +31,9 @@ var (
 // ErrCertificateRevoked is returned when a certificate is found to be revoked
 var ErrCertificateRevoked = errors.New("certificate has been revoked")
 
+// ClientCommonNamePrefix prefixes client IDs in issued certificate subjects.
+const ClientCommonNamePrefix = "SMESH-VPN-Client-"
+
 // CertificateAuthority will be used by the discovery server to manage certificates
 // this will sign certificates for clients
 type CertificateAuthority struct {
@@ -75,8 +78,12 @@ func NewCertificateAuthority() (*CertificateAuthority, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate CA key pair: %w", err)
 	}
+	caID, err := uuid.NewV7()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate CA ID: %w", err)
+	}
 	ca := &CertificateAuthority{
-		ID:               uuid.New().String(),
+		ID:               caID.String(),
 		PrivateKey:       priv,
 		PublicKey:        pub,
 		Certificates:     make(map[string]*x509.Certificate),
@@ -153,7 +160,7 @@ func (ca *CertificateAuthority) IssueClientCertificate(clientPubKey ed25519.Publ
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			CommonName: fmt.Sprintf("SMESH-VPN-Client-%s", clientID),
+			CommonName: fmt.Sprintf("%s%s", ClientCommonNamePrefix, clientID),
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(30 * 24 * time.Hour), // 30 days validity

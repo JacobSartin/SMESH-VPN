@@ -48,10 +48,15 @@ func main() {
 		log.Fatalf("Failed to resolve server address: %v", err)
 	}
 
+	serverID, err := uuid.NewV7()
+	if err != nil {
+		log.Fatalf("Failed to generate server peer ID: %v", err)
+	}
+
 	// Create peer info for the server
 	serverPeerInfo := session.PeerInfo{
 		ID: uuid.NullUUID{
-			UUID:  uuid.New(),
+			UUID:  serverID,
 			Valid: true,
 		},
 		Address:  tcpAddr,

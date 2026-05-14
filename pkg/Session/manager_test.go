@@ -106,8 +106,8 @@ func addManagedTestSession(t *testing.T, manager *SessionManager, lastActivity t
 		_ = peerConn.Close()
 	})
 
-	sessionID := uuid.New()
-	peerID := uuid.New()
+	sessionID := mustNewV7(t)
+	peerID := mustNewV7(t)
 	testSession := &Session{
 		connection:   conn,
 		peer:         PeerInfo{ID: uuid.NullUUID{UUID: peerID, Valid: true}, Address: peerConn.LocalAddr()},

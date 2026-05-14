@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // TestCertificateArchitecture demonstrates the complete certificate architecture
@@ -14,6 +16,13 @@ func TestCertificateArchitecture(t *testing.T) {
 	ca, err := NewCertificateAuthority()
 	if err != nil {
 		t.Fatalf("Failed to create CA: %v", err)
+	}
+	caID, err := uuid.Parse(ca.ID)
+	if err != nil {
+		t.Fatalf("CA ID is not a valid UUID: %v", err)
+	}
+	if caID.Version() != 7 {
+		t.Fatalf("expected CA ID to be UUIDv7, got v%d", caID.Version())
 	}
 
 	t.Logf("✓ Discovery server CA created with ID: %s", ca.ID)

@@ -53,8 +53,7 @@ type unauthenticatedHandshakeResponse struct {
 
 // PeerInfo contains information about a peer in the VPN mesh
 type PeerInfo struct {
-	// ! use UUIDv1 for ID, should be unique across the network
-	// ID is a unique identifier for the peer
+	// ID is a unique UUIDv7 identifier for the peer.
 	ID uuid.NullUUID
 	// Address is the network address of the peer
 	Address net.Addr
@@ -496,7 +495,11 @@ func (s *Session) establishUnauthenticatedKeyExchange(identity *ClientIdentity) 
 		hello.ID = identity.ID
 	}
 	if !hello.ID.Valid {
-		hello.ID = uuid.NullUUID{UUID: uuid.New(), Valid: true}
+		id, err := uuid.NewV7()
+		if err != nil {
+			return fmt.Errorf("failed to generate client ID: %w", err)
+		}
+		hello.ID = uuid.NullUUID{UUID: id, Valid: true}
 	}
 
 	helloBytes, err := json.Marshal(hello)
@@ -591,7 +594,12 @@ func newUnauthenticatedSessionFromConn(conn net.Conn) (*Session, error) {
 
 	peerID := hello.ID
 	if !peerID.Valid {
-		peerID = uuid.NullUUID{UUID: uuid.New(), Valid: true}
+		id, err := uuid.NewV7()
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("failed to generate peer ID: %w", err)
+		}
+		peerID = uuid.NullUUID{UUID: id, Valid: true}
 	}
 
 	session := &Session{

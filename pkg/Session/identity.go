@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,7 +69,8 @@ func (c *ClientIdentity) LoadCertificate(certData []byte) error {
 
 	// If certificate has a subject with CommonName, use it as ID
 	if cert.Subject.CommonName != "" {
-		id, err := uuid.Parse(cert.Subject.CommonName)
+		clientID := strings.TrimPrefix(cert.Subject.CommonName, certs.ClientCommonNamePrefix)
+		id, err := uuid.Parse(clientID)
 		if err == nil {
 			c.ID = uuid.NullUUID{UUID: id, Valid: true}
 		} else {
