@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"time"
 
 	session "github.com/JacobSartin/SMESH-VPN/pkg/Session"
@@ -20,6 +21,21 @@ func main() {
 	maxIdleTime := 30 * time.Minute
 	maxKeyAge := 24 * time.Hour
 	sessionManager := session.NewSessionManager(cleanupInterval, maxIdleTime, maxKeyAge, identity)
+	defer sessionManager.Shutdown()
+
+	discoveryServer := NewDiscoveryServer(sessionManager, 2*time.Minute)
+	discoveryHTTPServer := &http.Server{
+		Addr:              ":8081",
+		Handler:           discoveryServer.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		fmt.Println("Discovery API listening on :8081")
+		if err := discoveryHTTPServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start discovery API: %v", err)
+		}
+	}()
 
 	// Set up event handling - Option 1: Using a channel
 	eventChannel := make(chan session.SessionEvent, 10)
