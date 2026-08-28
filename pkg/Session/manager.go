@@ -5,8 +5,7 @@ import (
 	"net"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 // SessionEvent represents different types of session events
@@ -34,9 +33,9 @@ type SessionManager struct {
 	// mu protects access to the sessions map
 	mu sync.RWMutex
 	// sessions is a map of session ID to Session instance
-	sessions map[string]*Session
+	sessions map[uuid.UUID]*Session
 	// sessionsByPeerID allows looking up sessions by peer ID
-	sessionsByPeerID map[string]*Session
+	sessionsByPeerID map[uuid.UUID]*Session
 	// cleanupInterval determines how often idle session cleanup runs
 	cleanupInterval time.Duration
 	// maxIdleTime is the maximum time a session can be idle before cleanup
@@ -56,8 +55,8 @@ type SessionManager struct {
 // NewSessionManager creates a new session manager
 func NewSessionManager(cleanupInterval, maxIdleTime, maxKeyAge time.Duration, identity *ClientIdentity) *SessionManager {
 	sm := &SessionManager{
-		sessions:         make(map[string]*Session),
-		sessionsByPeerID: make(map[string]*Session),
+		sessions:         make(map[uuid.UUID]*Session),
+		sessionsByPeerID: make(map[uuid.UUID]*Session),
 		cleanupInterval:  cleanupInterval,
 		maxIdleTime:      maxIdleTime,
 		maxKeyAge:        maxKeyAge,
@@ -76,12 +75,12 @@ func (sm *SessionManager) GetSession(sessionID uuid.UUID) (*Session, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	session, exists := sm.sessions[sessionID.String()]
+	session, exists := sm.sessions[sessionID]
 	return session, exists
 }
 
 // GetSessionByPeerID retrieves a session by the peer's ID
-func (sm *SessionManager) GetSessionByPeerID(peerID string) (*Session, bool) {
+func (sm *SessionManager) GetSessionByPeerID(peerID uuid.UUID) (*Session, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -92,10 +91,10 @@ func (sm *SessionManager) GetSessionByPeerID(peerID string) (*Session, bool) {
 // RemoveSession removes a session from the manager
 func (sm *SessionManager) RemoveSession(sessionID uuid.UUID) {
 	sm.mu.Lock()
-	session, exists := sm.sessions[sessionID.String()]
+	session, exists := sm.sessions[sessionID]
 	if exists {
-		delete(sm.sessionsByPeerID, session.peer.ID.UUID.String())
-		delete(sm.sessions, sessionID.String())
+		delete(sm.sessionsByPeerID, session.peer.ID)
+		delete(sm.sessions, sessionID)
 	}
 	sm.mu.Unlock()
 
@@ -121,8 +120,8 @@ func (sm *SessionManager) CloseAll() {
 	}
 
 	// Clear the maps
-	sm.sessions = make(map[string]*Session)
-	sm.sessionsByPeerID = make(map[string]*Session)
+	sm.sessions = make(map[uuid.UUID]*Session)
+	sm.sessionsByPeerID = make(map[uuid.UUID]*Session)
 	sm.mu.Unlock()
 
 	for _, session := range sessions {
@@ -139,11 +138,11 @@ func (sm *SessionManager) Count() int {
 }
 
 // ListSessionIDs returns a list of all session IDs
-func (sm *SessionManager) ListSessionIDs() []string {
+func (sm *SessionManager) ListSessionIDs() []uuid.UUID {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	ids := make([]string, 0, len(sm.sessions))
+	ids := make([]uuid.UUID, 0, len(sm.sessions))
 	for id := range sm.sessions {
 		ids = append(ids, id)
 	}
@@ -182,7 +181,7 @@ func (sm *SessionManager) CleanupIdleSessions() {
 
 	for id, session := range sm.sessions {
 		if session.IdleTime() > sm.maxIdleTime {
-			delete(sm.sessionsByPeerID, session.peer.ID.UUID.String())
+			delete(sm.sessionsByPeerID, session.peer.ID)
 			delete(sm.sessions, id)
 			idleSessions = append(idleSessions, session)
 		}
@@ -197,7 +196,7 @@ func (sm *SessionManager) CleanupIdleSessions() {
 // rekeyAgingSessions performs key rotation for sessions with old keys
 func (sm *SessionManager) rekeyAgingSessions() {
 	sm.mu.RLock()
-	sessionsToRekey := make([]string, 0)
+	sessionsToRekey := make([]uuid.UUID, 0)
 
 	for id, session := range sm.sessions {
 		// Just collect IDs that need rekeying to avoid deadlock
@@ -233,8 +232,8 @@ func (sm *SessionManager) CreateSession(peerInfo PeerInfo) (*Session, error) {
 
 	sm.mu.Lock()
 	// Add the session to the manager
-	sm.sessions[session.sessionID.String()] = session
-	sm.sessionsByPeerID[session.peer.ID.UUID.String()] = session
+	sm.sessions[session.sessionID] = session
+	sm.sessionsByPeerID[session.peer.ID] = session
 	sm.mu.Unlock()
 
 	return session, nil
@@ -259,8 +258,8 @@ func (sm *SessionManager) CreateSessionFromConnection(conn net.Conn) (*Session, 
 
 	sm.mu.Lock()
 	// Add the session to the manager
-	sm.sessions[session.sessionID.String()] = session
-	sm.sessionsByPeerID[session.peer.ID.UUID.String()] = session
+	sm.sessions[session.sessionID] = session
+	sm.sessionsByPeerID[session.peer.ID] = session
 	sm.mu.Unlock()
 
 	// Notify about the new connection

@@ -8,12 +8,12 @@ import (
 	"net"
 	"sync"
 	"time"
+	"uuid"
 
 	aes "github.com/JacobSartin/SMESH-VPN/pkg/AES"
 	auth "github.com/JacobSartin/SMESH-VPN/pkg/Auth"
 	network "github.com/JacobSartin/SMESH-VPN/pkg/Network"
 	pqxdh "github.com/JacobSartin/SMESH-VPN/pkg/PQXDH"
-	"github.com/google/uuid"
 )
 
 // Status represents the current state of a session
@@ -32,18 +32,14 @@ const (
 
 // Errors related to session management
 var (
-	ErrSessionClosed     = errors.New("session has been closed")
-	ErrInvalidPeer       = errors.New("invalid peer information")
-	ErrAuthFailed        = errors.New("peer authentication failed")
-	ErrKeyExchangeFailed = errors.New("key exchange failed")
-	ErrSessionTimeout    = errors.New("session timed out")
-	ErrInvalidIdentity   = errors.New("invalid client identity")
+	ErrSessionClosed = errors.New("session has been closed")
+	ErrInvalidPeer   = errors.New("invalid peer information")
 )
 
 type unauthenticatedHandshakeHello struct {
-	PQPublicKey []byte        `json:"pq_public_key"`
-	ECPublicKey []byte        `json:"ec_public_key"`
-	ID          uuid.NullUUID `json:"id"`
+	PQPublicKey []byte    `json:"pq_public_key"`
+	ECPublicKey []byte    `json:"ec_public_key"`
+	ID          uuid.UUID `json:"id"`
 }
 
 type unauthenticatedHandshakeResponse struct {
@@ -54,7 +50,7 @@ type unauthenticatedHandshakeResponse struct {
 // PeerInfo contains information about a peer in the VPN mesh
 type PeerInfo struct {
 	// ID is a unique UUIDv7 identifier for the peer.
-	ID uuid.NullUUID
+	ID uuid.UUID
 	// Address is the network address of the peer
 	Address net.Addr
 	// Certificate can be used for certificate-based auth
@@ -80,8 +76,6 @@ type Session struct {
 	established time.Time
 	// lastActivity records the last time the session was used
 	lastActivity time.Time
-	// tunnel represents the virtual network interface
-	tunnel interface{}
 	// closed is set to true when the session is terminated
 	closed bool
 	// sessionID is a unique identifier for this session
@@ -95,13 +89,8 @@ type Session struct {
 
 // NewSession creates a new session with the given peer
 func NewSession(peer PeerInfo, identity *ClientIdentity) (*Session, error) {
-	if !peer.ID.Valid || peer.Address == nil {
+	if peer.ID == uuid.Nil() || peer.Address == nil {
 		return nil, ErrInvalidPeer
-	}
-
-	id, err := uuid.NewV7()
-	if err != nil {
-		return nil, err
 	}
 
 	// initialize the connection
@@ -116,8 +105,7 @@ func NewSession(peer PeerInfo, identity *ClientIdentity) (*Session, error) {
 		status:       StatusInitializing,
 		established:  time.Now(),
 		lastActivity: time.Now(),
-		closed:       false,
-		sessionID:    id,
+		sessionID:    uuid.NewV7(),
 	}
 
 	// Perform the key exchange to establish encryption
@@ -148,7 +136,7 @@ func NewSessionFromConn(conn net.Conn, identity *ClientIdentity) (*Session, erro
 
 	// Unmarshal the hello message
 	hello := &auth.AuthenticatedHandshakeHello{}
-	if err := hello.UnmarshalJSON(helloBytes); err != nil {
+	if err := json.Unmarshal(helloBytes, hello); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
@@ -165,19 +153,13 @@ func NewSessionFromConn(conn net.Conn, identity *ClientIdentity) (*Session, erro
 		LastSeen:    time.Now(),
 	}
 
-	id, err := uuid.NewV7()
-	if err != nil {
-		return nil, err
-	}
-
 	session := &Session{
 		connection:   conn,
 		peer:         peer,
 		status:       StatusInitializing,
 		established:  time.Now(),
 		lastActivity: time.Now(),
-		closed:       false,
-		sessionID:    id,
+		sessionID:    uuid.NewV7(),
 	}
 
 	// finish the exchange
@@ -203,7 +185,7 @@ func NewSessionFromConn(conn net.Conn, identity *ClientIdentity) (*Session, erro
 	session.cipher = cipher
 
 	// send the response back to the client
-	responseBytes, err := response.MarshalJSON()
+	responseBytes, err := json.Marshal(response)
 	if err != nil {
 		conn.Close() // Close the connection if marshaling fails
 		return nil, fmt.Errorf("failed to marshal response: %w", err)
@@ -253,7 +235,7 @@ func (s *Session) EstablishKeyExchange(identity *ClientIdentity) error {
 	if err != nil {
 		return err
 	}
-	helloBytes, err := hello.MarshalJSON()
+	helloBytes, err := json.Marshal(hello)
 	if err != nil {
 		return err
 	}
@@ -270,7 +252,7 @@ func (s *Session) EstablishKeyExchange(identity *ClientIdentity) error {
 	}
 
 	response := &auth.AuthenticatedHandshakeResponse{}
-	if err := response.UnmarshalJSON(responseBytes); err != nil {
+	if err := json.Unmarshal(responseBytes, response); err != nil {
 		return fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
@@ -478,7 +460,7 @@ func (s *Session) RekeyIfNeeded(maxKeyAge time.Duration) error {
 }
 
 func hasAuthenticatedIdentity(identity *ClientIdentity) bool {
-	return identity != nil && identity.Certificate != nil && len(identity.PrivateKey) > 0 && identity.Verifier != nil
+	return identity != nil && identity.Certificate != nil && identity.PrivateKey != nil && identity.Verifier != nil
 }
 
 func (s *Session) establishUnauthenticatedKeyExchange(identity *ClientIdentity) error {
@@ -494,12 +476,8 @@ func (s *Session) establishUnauthenticatedKeyExchange(identity *ClientIdentity) 
 	if identity != nil {
 		hello.ID = identity.ID
 	}
-	if !hello.ID.Valid {
-		id, err := uuid.NewV7()
-		if err != nil {
-			return fmt.Errorf("failed to generate client ID: %w", err)
-		}
-		hello.ID = uuid.NullUUID{UUID: id, Valid: true}
+	if hello.ID == uuid.Nil() {
+		hello.ID = uuid.NewV7()
 	}
 
 	helloBytes, err := json.Marshal(hello)
@@ -586,20 +564,9 @@ func newUnauthenticatedSessionFromConn(conn net.Conn) (*Session, error) {
 		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
 	}
 
-	id, err := uuid.NewV7()
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-
 	peerID := hello.ID
-	if !peerID.Valid {
-		id, err := uuid.NewV7()
-		if err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("failed to generate peer ID: %w", err)
-		}
-		peerID = uuid.NullUUID{UUID: id, Valid: true}
+	if peerID == uuid.Nil() {
+		peerID = uuid.NewV7()
 	}
 
 	session := &Session{
@@ -609,7 +576,7 @@ func newUnauthenticatedSessionFromConn(conn net.Conn) (*Session, error) {
 		status:       StatusEstablished,
 		established:  time.Now(),
 		lastActivity: time.Now(),
-		sessionID:    id,
+		sessionID:    uuid.NewV7(),
 	}
 
 	response := unauthenticatedHandshakeResponse{

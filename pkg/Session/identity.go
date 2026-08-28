@@ -1,22 +1,20 @@
 package session
 
 import (
-	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/x509"
 	"errors"
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
 	certs "github.com/JacobSartin/SMESH-VPN/pkg/Certs"
-	"github.com/google/uuid"
 )
 
 // Errors related to client identity
 var (
 	ErrInvalidCertificate = errors.New("invalid certificate")
-	ErrIdentityNotLoaded  = errors.New("client identity not loaded")
-	ErrIdentityLocked     = errors.New("identity is locked")
 )
 
 // ClientIdentity contains the information about the local client,
@@ -25,11 +23,11 @@ type ClientIdentity struct {
 	// mutex for synchronized access to identity data
 	mu sync.RWMutex
 	// ID is a unique identifier for this client
-	ID uuid.NullUUID
+	ID uuid.UUID
 	// Certificate is the client's certificate for authentication
 	Certificate *x509.Certificate // PrivateKey is the client's private key corresponding to the certificate
 	// This is sensitive information that should be protected
-	PrivateKey ed25519.PrivateKey
+	PrivateKey *mldsa.PrivateKey
 	// certificate verifier
 	Verifier *certs.ClientCertificateVerifier // Used to verify peer certificates
 	// CreatedAt tracks when this identity was created
@@ -47,7 +45,6 @@ type ClientIdentity struct {
 // NewClientIdentity creates a new client identity
 func NewClientIdentity() *ClientIdentity {
 	return &ClientIdentity{
-		ID:         uuid.NullUUID{Valid: false},
 		CreatedAt:  time.Now(),
 		DeviceInfo: make(map[string]string),
 		Metadata:   make(map[string]interface{}),
@@ -72,9 +69,9 @@ func (c *ClientIdentity) LoadCertificate(certData []byte) error {
 		clientID := strings.TrimPrefix(cert.Subject.CommonName, certs.ClientCommonNamePrefix)
 		id, err := uuid.Parse(clientID)
 		if err == nil {
-			c.ID = uuid.NullUUID{UUID: id, Valid: true}
+			c.ID = id
 		} else {
-			c.ID = uuid.NullUUID{Valid: false} // Reset ID if parsing fails
+			c.ID = uuid.Nil()
 		}
 	}
 

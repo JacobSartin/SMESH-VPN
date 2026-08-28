@@ -5,20 +5,8 @@ import (
 	"net"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 )
-
-func mustNewV7(t *testing.T) uuid.UUID {
-	t.Helper()
-
-	id, err := uuid.NewV7()
-	if err != nil {
-		t.Fatalf("failed to generate UUIDv7: %v", err)
-	}
-
-	return id
-}
 
 func TestUnauthenticatedSessionKeyExchangeAndMessaging(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
@@ -40,11 +28,11 @@ func TestUnauthenticatedSessionKeyExchangeAndMessaging(t *testing.T) {
 
 	clientSession := &Session{
 		connection:   clientConn,
-		peer:         PeerInfo{ID: uuid.NullUUID{UUID: mustNewV7(t), Valid: true}, Address: serverConn.LocalAddr()},
+		peer:         PeerInfo{ID: uuid.NewV7(), Address: serverConn.LocalAddr()},
 		status:       StatusInitializing,
 		established:  time.Now(),
 		lastActivity: time.Now(),
-		sessionID:    mustNewV7(t),
+		sessionID:    uuid.NewV7(),
 	}
 
 	if err := clientSession.EstablishKeyExchange(nil); err != nil {
@@ -70,17 +58,17 @@ func TestUnauthenticatedSessionKeyExchangeAndMessaging(t *testing.T) {
 	if serverSession.Status() != StatusEstablished {
 		t.Fatalf("expected server session established, got %v", serverSession.Status())
 	}
-	if clientSession.SessionID().Version() != 7 {
-		t.Fatalf("expected client session ID to be UUIDv7, got v%d", clientSession.SessionID().Version())
+	if got := clientSession.SessionID()[6] >> 4; got != 7 {
+		t.Fatalf("expected client session ID to be UUIDv7, got v%d", got)
 	}
-	if serverSession.SessionID().Version() != 7 {
-		t.Fatalf("expected server session ID to be UUIDv7, got v%d", serverSession.SessionID().Version())
+	if got := serverSession.SessionID()[6] >> 4; got != 7 {
+		t.Fatalf("expected server session ID to be UUIDv7, got v%d", got)
 	}
-	if !serverSession.PeerInfo().ID.Valid {
+	if serverSession.PeerInfo().ID == uuid.Nil() {
 		t.Fatal("expected unauthenticated handshake to assign a peer ID")
 	}
-	if serverSession.PeerInfo().ID.UUID.Version() != 7 {
-		t.Fatalf("expected peer ID to be UUIDv7, got v%d", serverSession.PeerInfo().ID.UUID.Version())
+	if got := serverSession.PeerInfo().ID[6] >> 4; got != 7 {
+		t.Fatalf("expected peer ID to be UUIDv7, got v%d", got)
 	}
 
 	message := []byte("hello from unauthenticated session")

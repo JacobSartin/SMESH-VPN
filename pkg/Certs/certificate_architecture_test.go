@@ -1,12 +1,11 @@
 package certs
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
+	"crypto"
+	"crypto/mldsa"
 	"crypto/x509"
 	"testing"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 // TestCertificateArchitecture demonstrates the complete certificate architecture
@@ -21,8 +20,8 @@ func TestCertificateArchitecture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CA ID is not a valid UUID: %v", err)
 	}
-	if caID.Version() != 7 {
-		t.Fatalf("expected CA ID to be UUIDv7, got v%d", caID.Version())
+	if got := caID[6] >> 4; got != 7 {
+		t.Fatalf("expected CA ID to be UUIDv7, got v%d", got)
 	}
 
 	t.Logf("✓ Discovery server CA created with ID: %s", ca.ID)
@@ -54,22 +53,22 @@ func TestCertificateArchitecture(t *testing.T) {
 	t.Logf("✓ Both clients have CA certificate and can verify peer certificates")
 
 	// Step 4: Generate key pairs for both clients
-	clientAPub, clientAPriv, err := ed25519.GenerateKey(rand.Reader)
+	clientAPriv, err := mldsa.GenerateKey(mldsa.MLDSA44())
 	if err != nil {
 		t.Fatalf("Failed to generate client A keys: %v", err)
 	}
-	clientBPub, _, err := ed25519.GenerateKey(rand.Reader)
+	clientBPriv, err := mldsa.GenerateKey(mldsa.MLDSA44())
 	if err != nil {
 		t.Fatalf("Failed to generate client B keys: %v", err)
 	}
 
 	// Step 5: Discovery server issues certificates to approved clients
-	clientACertDER, err := ca.IssueClientCertificate(clientAPub, "client-A")
+	clientACertDER, err := ca.IssueClientCertificate(clientAPriv.PublicKey(), "client-A")
 	if err != nil {
 		t.Fatalf("Failed to issue certificate for client A: %v", err)
 	}
 
-	clientBCertDER, err := ca.IssueClientCertificate(clientBPub, "client-B")
+	clientBCertDER, err := ca.IssueClientCertificate(clientBPriv.PublicKey(), "client-B")
 	if err != nil {
 		t.Fatalf("Failed to issue certificate for client B: %v", err)
 	}
@@ -123,7 +122,10 @@ func TestCertificateArchitecture(t *testing.T) {
 	handshakeData := []byte("SMESH-VPN-HANDSHAKE-DATA")
 
 	// Client A signs handshake data
-	signatureA := ed25519.Sign(clientAPriv, handshakeData)
+	signatureA, err := clientAPriv.Sign(nil, handshakeData, crypto.Hash(0))
+	if err != nil {
+		t.Fatalf("Failed to sign handshake: %v", err)
+	}
 
 	// Client B verifies the signature using client A's fingerprint
 	valid, err := clientBVerifier.VerifyHandshakeWithFingerprint(handshakeData, signatureA, clientAFingerprint)
@@ -222,7 +224,7 @@ func TestInvalidCertificateRejection(t *testing.T) {
 		t.Fatalf("Failed to create verifier: %v", err)
 	}
 	// Create a self-signed certificate (not signed by our CA)
-	_, selfSignedPriv, err := ed25519.GenerateKey(rand.Reader)
+	selfSignedPriv, err := mldsa.GenerateKey(mldsa.MLDSA44())
 	if err != nil {
 		t.Fatalf("Failed to generate self-signed keys: %v", err)
 	}
@@ -241,12 +243,12 @@ func TestInvalidCertificateRejection(t *testing.T) {
 	t.Logf("✓ Invalid certificate properly rejected: %v", err)
 
 	// Test with a legitimate certificate from our CA
-	validPub, _, err := ed25519.GenerateKey(rand.Reader)
+	validPriv, err := mldsa.GenerateKey(mldsa.MLDSA44())
 	if err != nil {
 		t.Fatalf("Failed to generate valid keys: %v", err)
 	}
 
-	validCertDER, err := ca.IssueClientCertificate(validPub, "valid-client")
+	validCertDER, err := ca.IssueClientCertificate(validPriv.PublicKey(), "valid-client")
 	if err != nil {
 		t.Fatalf("Failed to issue valid certificate: %v", err)
 	}
@@ -261,7 +263,10 @@ func TestInvalidCertificateRejection(t *testing.T) {
 
 	// Test signature verification with wrong private key
 	handshakeData := []byte("test-handshake")
-	wrongSignature := ed25519.Sign(selfSignedPriv, handshakeData) // Wrong private key
+	wrongSignature, err := selfSignedPriv.Sign(nil, handshakeData, crypto.Hash(0))
+	if err != nil {
+		t.Fatalf("Failed to create wrong signature: %v", err)
+	}
 
 	fingerprint, err := verifier.GenerateCertificateFingerprint(validCertDER)
 	if err != nil {

@@ -4,8 +4,7 @@ import (
 	"net"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 func TestRemoveSessionDoesNotDeadlockWhenEventsEnabled(t *testing.T) {
@@ -106,11 +105,11 @@ func addManagedTestSession(t *testing.T, manager *SessionManager, lastActivity t
 		_ = peerConn.Close()
 	})
 
-	sessionID := mustNewV7(t)
-	peerID := mustNewV7(t)
+	sessionID := uuid.NewV7()
+	peerID := uuid.NewV7()
 	testSession := &Session{
 		connection:   conn,
-		peer:         PeerInfo{ID: uuid.NullUUID{UUID: peerID, Valid: true}, Address: peerConn.LocalAddr()},
+		peer:         PeerInfo{ID: peerID, Address: peerConn.LocalAddr()},
 		status:       StatusEstablished,
 		established:  time.Now(),
 		lastActivity: lastActivity,
@@ -118,8 +117,8 @@ func addManagedTestSession(t *testing.T, manager *SessionManager, lastActivity t
 	}
 
 	manager.mu.Lock()
-	manager.sessions[sessionID.String()] = testSession
-	manager.sessionsByPeerID[peerID.String()] = testSession
+	manager.sessions[sessionID] = testSession
+	manager.sessionsByPeerID[peerID] = testSession
 	manager.mu.Unlock()
 
 	return sessionID

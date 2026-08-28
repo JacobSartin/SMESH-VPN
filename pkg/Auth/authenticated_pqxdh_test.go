@@ -2,15 +2,15 @@ package auth
 
 import (
 	"bytes"
-	"crypto/ed25519"
-	"crypto/rand"
+	"crypto/mldsa"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
+	"uuid"
 
 	certs "github.com/JacobSartin/SMESH-VPN/pkg/Certs"
-	"github.com/google/uuid"
 )
 
 // EstablishAuthenticatedConnection performs the complete authenticated handshake
@@ -80,7 +80,7 @@ func TestAuthenticatedPQXDHHandshake(t *testing.T) {
 	}
 
 	// Create authenticated PQXDH instances
-	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.Nil())
 	if err != nil {
 		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestAuthenticatedHandshakeWithRevokedCertificate(t *testing.T) {
 	serverVerifier.EnableCRLChecking(true)
 
 	// Create authenticated PQXDH instances with pre-configured verifiers
-	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.Nil())
 	if err != nil {
 		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestAuthenticatedHandshakeWithInvalidSignature(t *testing.T) {
 	}
 
 	// Generate a different private key (not matching the certificate)
-	_, wrongPrivKey, err := ed25519.GenerateKey(rand.Reader)
+	wrongPrivKey, err := mldsa.GenerateKey(mldsa.MLDSA44())
 	if err != nil {
 		t.Fatalf("Failed to generate wrong private key: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestAuthenticatedHandshakeWithInvalidSignature(t *testing.T) {
 	}
 
 	// Create authenticated PQXDH instances with wrong client key
-	client, err := NewAuthenticatedPQXDHClient(clientCert, wrongPrivKey, clientVerifier, uuid.NullUUID{})
+	client, err := NewAuthenticatedPQXDHClient(clientCert, wrongPrivKey, clientVerifier, uuid.Nil())
 	if err != nil {
 		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestAuthenticatedHandshakeReplayProtection(t *testing.T) {
 	}
 
 	// Create authenticated PQXDH instances
-	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.Nil())
 	if err != nil {
 		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
 	}
@@ -335,11 +335,9 @@ func TestAuthenticatedHandshakeReplayProtection(t *testing.T) {
 	clientHello.Timestamp = time.Now().Add(-10 * time.Minute)
 
 	// Re-sign with the old timestamp
-	signatureData := append(clientHello.PQPublicKey, clientHello.ECPublicKey...)
-	signatureData = append(signatureData, clientHello.Certificate...)
-	timestampBytes, _ := clientHello.Timestamp.MarshalBinary()
-	signatureData = append(signatureData, timestampBytes...)
-	clientHello.Signature = ed25519.Sign(clientPrivKey, signatureData)
+	if err := clientHello.Sign(clientPrivKey); err != nil {
+		t.Fatalf("Failed to re-sign client hello: %v", err)
+	}
 
 	// Attempt to process the old message - should fail
 	_, _, err = server.ProcessClientHello(clientHello)
@@ -393,9 +391,8 @@ func BenchmarkAuthenticatedHandshake(b *testing.B) {
 		b.Fatalf("Failed to create server verifier: %v", err)
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	for b.Loop() {
+		client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.Nil())
 		if err != nil {
 			b.Fatalf("Failed to create authenticated PQXDH client: %v", err)
 		}
@@ -416,15 +413,15 @@ func BenchmarkAuthenticatedHandshake(b *testing.B) {
 }
 
 // Helper function to create a test client certificate
-func createTestClientCertificate(ca *certs.CertificateAuthority) (*x509.Certificate, ed25519.PrivateKey, error) {
+func createTestClientCertificate(ca *certs.CertificateAuthority) (*x509.Certificate, *mldsa.PrivateKey, error) {
 	// Generate key pair
-	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	privKey, err := mldsa.GenerateKey(mldsa.MLDSA44())
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// Use CA to issue certificate
-	certDER, err := ca.IssueClientCertificate(pubKey, "test-client")
+	certDER, err := ca.IssueClientCertificate(privKey.PublicKey(), "test-client")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -438,15 +435,15 @@ func createTestClientCertificate(ca *certs.CertificateAuthority) (*x509.Certific
 }
 
 // Helper function to create a test server certificate
-func createTestServerCertificate(ca *certs.CertificateAuthority) (*x509.Certificate, ed25519.PrivateKey, error) {
+func createTestServerCertificate(ca *certs.CertificateAuthority) (*x509.Certificate, *mldsa.PrivateKey, error) {
 	// Generate key pair
-	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	privKey, err := mldsa.GenerateKey(mldsa.MLDSA44())
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// Use CA to issue certificate
-	certDER, err := ca.IssueClientCertificate(pubKey, "test-server")
+	certDER, err := ca.IssueClientCertificate(privKey.PublicKey(), "test-server")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -502,7 +499,7 @@ func TestInvalidSignatureWrongKey(t *testing.T) {
 	}
 
 	// Create authenticated PQXDH instances
-	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.Nil())
 	if err != nil {
 		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
 	}
@@ -518,17 +515,15 @@ func TestInvalidSignatureWrongKey(t *testing.T) {
 	}
 
 	// Generate a different private key to sign with
-	_, wrongPrivKey, err := ed25519.GenerateKey(rand.Reader)
+	wrongPrivKey, err := mldsa.GenerateKey(mldsa.MLDSA44())
 	if err != nil {
 		t.Fatalf("Failed to generate wrong private key: %v", err)
 	}
 
 	// Re-sign the message with the wrong private key
-	signatureData := append(clientHello.PQPublicKey, clientHello.ECPublicKey...)
-	signatureData = append(signatureData, clientHello.Certificate...)
-	timestampBytes, _ := clientHello.Timestamp.MarshalBinary()
-	signatureData = append(signatureData, timestampBytes...)
-	clientHello.Signature = ed25519.Sign(wrongPrivKey, signatureData)
+	if err := clientHello.Sign(wrongPrivKey); err != nil {
+		t.Fatalf("Failed to re-sign client hello: %v", err)
+	}
 
 	// Attempt to process the message with wrong signature - should fail
 	_, _, err = server.ProcessClientHello(clientHello)
@@ -583,7 +578,7 @@ func TestValidSignatureTamperedMessage(t *testing.T) {
 	}
 
 	// Create authenticated PQXDH instances
-	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.NullUUID{})
+	client, err := NewAuthenticatedPQXDHClient(clientCert, clientPrivKey, clientVerifier, uuid.Nil())
 	if err != nil {
 		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
 	}
@@ -657,7 +652,7 @@ func TestBinary(t *testing.T) {
 		t.Fatalf("Failed to generate server certificate: %v", err)
 	}
 
-	client, err := NewAuthenticatedPQXDHClient(clientCert, clientKey, verifier, uuid.NullUUID{})
+	client, err := NewAuthenticatedPQXDHClient(clientCert, clientKey, verifier, uuid.Nil())
 	if err != nil {
 		t.Fatalf("Failed to create authenticated PQXDH client: %v", err)
 	}
@@ -671,24 +666,24 @@ func TestBinary(t *testing.T) {
 		t.Fatalf("Failed to create client hello: %v", err)
 	}
 
-	helloBytes, err := hello.MarshalJSON()
+	helloBytes, err := json.Marshal(hello)
 	if err != nil {
 		t.Fatalf("Failed to marshal client hello: %v", err)
 	}
 
 	hello2 := &AuthenticatedHandshakeHello{}
-	if err := hello2.UnmarshalJSON(helloBytes); err != nil {
+	if err := json.Unmarshal(helloBytes, hello2); err != nil {
 		t.Fatalf("Failed to unmarshal client hello: %v", err)
 	}
 
 	response, _, _ := server.ProcessClientHello(hello2)
-	responseBytes, err := response.MarshalJSON()
+	responseBytes, err := json.Marshal(response)
 	if err != nil {
 		t.Fatalf("Failed to marshal server response: %v", err)
 	}
 
 	response2 := &AuthenticatedHandshakeResponse{}
-	if err := response2.UnmarshalJSON(responseBytes); err != nil {
+	if err := json.Unmarshal(responseBytes, response2); err != nil {
 		t.Fatalf("Failed to unmarshal server response: %v", err)
 	}
 }

@@ -1,7 +1,7 @@
 package certs
 
 import (
-	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -11,21 +11,14 @@ import (
 	"math/big"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 // Errors related to certificate authority operations
 var (
-	ErrInvalidCertificate          = errors.New("invalid certificate")
-	ErrCertificateNotFound         = errors.New("certificate not found")
-	ErrCertificateAlreadyExists    = errors.New("certificate already exists")
-	ErrCertificateExpired          = errors.New("certificate expired")
-	ErrCertificateNotYetValid      = errors.New("certificate not yet valid")
-	ErrInvalidKeySize              = errors.New("invalid key size, must be 32 bytes (256 bits)")
-	ErrInvalidSignature            = errors.New("invalid signature")
-	ErrCertificateGenerationFailed = errors.New("certificate generation failed")
-	ErrCertificateAuthorityLocked  = errors.New("certificate authority is locked")
+	ErrCertificateNotFound        = errors.New("certificate not found")
+	ErrCertificateAlreadyExists   = errors.New("certificate already exists")
+	ErrCertificateAuthorityLocked = errors.New("certificate authority is locked")
 )
 
 // ErrCertificateRevoked is returned when a certificate is found to be revoked
@@ -41,9 +34,9 @@ type CertificateAuthority struct {
 	// ID is a unique identifier for this CA
 	ID string
 	// PrivateKey is the CA's private key used for signing certificates
-	PrivateKey ed25519.PrivateKey
+	PrivateKey *mldsa.PrivateKey
 	// PublicKey is the CA's public key used for verifying certificates
-	PublicKey ed25519.PublicKey
+	PublicKey *mldsa.PublicKey
 	// Certificates is a map of certificate ID to x509 certificate
 	Certificates map[string]*x509.Certificate
 	// CreatedAt tracks when this CA was created
@@ -74,18 +67,14 @@ type CertificateAuthority struct {
 // NewCertificateAuthority creates a new Certificate Authority for the discovery server
 func NewCertificateAuthority() (*CertificateAuthority, error) {
 	// Generate CA key pair
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	priv, err := mldsa.GenerateKey(mldsa.MLDSA44())
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate CA key pair: %w", err)
 	}
-	caID, err := uuid.NewV7()
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate CA ID: %w", err)
-	}
 	ca := &CertificateAuthority{
-		ID:               caID.String(),
+		ID:               uuid.NewV7().String(),
 		PrivateKey:       priv,
-		PublicKey:        pub,
+		PublicKey:        priv.PublicKey(),
 		Certificates:     make(map[string]*x509.Certificate),
 		CreatedAt:        time.Now(),
 		ExpiresAt:        time.Now().Add(10 * 365 * 24 * time.Hour), // 10 years
@@ -123,6 +112,7 @@ func (ca *CertificateAuthority) createCACertificate() (*x509.Certificate, error)
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 		MaxPathLen:            0, // Only allow end-entity certificates
+		SignatureAlgorithm:    x509.MLDSA44,
 	}
 
 	// Create self-signed CA certificate
@@ -141,7 +131,7 @@ func (ca *CertificateAuthority) createCACertificate() (*x509.Certificate, error)
 }
 
 // IssueClientCertificate creates and signs a certificate for a VPN client
-func (ca *CertificateAuthority) IssueClientCertificate(clientPubKey ed25519.PublicKey, clientID string) ([]byte, error) {
+func (ca *CertificateAuthority) IssueClientCertificate(clientPubKey *mldsa.PublicKey, clientID string) ([]byte, error) {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
@@ -164,10 +154,11 @@ func (ca *CertificateAuthority) IssueClientCertificate(clientPubKey ed25519.Publ
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(30 * 24 * time.Hour), // 30 days validity
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageKeyAgreement,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  false,
+		SignatureAlgorithm:    x509.MLDSA44,
 	}
 
 	// Sign the certificate with the CA
@@ -218,14 +209,6 @@ func (ca *CertificateAuthority) ValidateClientCertificate(cert *x509.Certificate
 		return false, fmt.Errorf("certificate verification failed: %w", err)
 	}
 
-	// Check if certificate is expired
-	now := time.Now()
-	if now.Before(cert.NotBefore) {
-		return false, ErrCertificateNotYetValid
-	}
-	if now.After(cert.NotAfter) {
-		return false, ErrCertificateExpired
-	}
 	// Check if the certificate is already revoked
 	isRevoked, err := ca.crlManager.CheckCertificateRevocation(cert)
 	if err != nil {
@@ -323,7 +306,7 @@ func (ca *CertificateAuthority) GetCertificateTemplate() *x509.Certificate {
 }
 
 // GetPrivateKey returns the CA private key (for CRL signing)
-func (ca *CertificateAuthority) GetPrivateKey() ed25519.PrivateKey {
+func (ca *CertificateAuthority) GetPrivateKey() *mldsa.PrivateKey {
 	return ca.PrivateKey
 }
 

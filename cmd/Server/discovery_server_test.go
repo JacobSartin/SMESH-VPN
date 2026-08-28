@@ -7,9 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+	"uuid"
 
 	session "github.com/JacobSartin/SMESH-VPN/pkg/Session"
-	"github.com/google/uuid"
 )
 
 func TestDiscoveryServerRegisterListGetRemovePeer(t *testing.T) {
@@ -52,7 +52,7 @@ func TestDiscoveryServerRegisterListGetRemovePeer(t *testing.T) {
 func TestDiscoveryServerRejectsInvalidRegistration(t *testing.T) {
 	discovery := newTestDiscoveryServer(t)
 
-	if _, err := discovery.RegisterPeer(uuid.Nil, "10.0.0.2:9000"); err != errInvalidPeerID {
+	if _, err := discovery.RegisterPeer(uuid.Nil(), "10.0.0.2:9000"); err != errInvalidPeerID {
 		t.Fatalf("expected errInvalidPeerID, got %v", err)
 	}
 	if _, err := discovery.RegisterPeer(uuid.New(), " "); err != errInvalidPeerAddress {
@@ -77,7 +77,7 @@ func TestDiscoveryServerCleansExpiredPeers(t *testing.T) {
 		t.Fatalf("register active peer failed: %v", err)
 	}
 
-	peers := discovery.ListPeers(uuid.Nil)
+	peers := discovery.ListPeers(uuid.Nil())
 	if len(peers) != 1 {
 		t.Fatalf("expected only active peer after cleanup, got %d", len(peers))
 	}

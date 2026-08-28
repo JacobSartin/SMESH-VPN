@@ -3,47 +3,44 @@
 package auth
 
 import (
-	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"time"
+	"uuid"
 
 	certs "github.com/JacobSartin/SMESH-VPN/pkg/Certs"
 	pqxdh "github.com/JacobSartin/SMESH-VPN/pkg/PQXDH"
-	"github.com/google/uuid"
 )
 
 // Errors for authenticated key exchange
 var (
-	ErrInvalidCertificate            = errors.New("invalid certificate")
-	ErrCertificateRevoked            = errors.New("certificate revoked")
-	ErrCertificateExpired            = errors.New("certificate expired")
-	ErrCertificateVerificationFailed = errors.New("certificate verification failed")
-	ErrHandshakeTimeout              = errors.New("handshake timeout")
-	ErrInvalidSignature              = errors.New("invalid handshake signature")
+	ErrInvalidCertificate = errors.New("invalid certificate")
+	ErrHandshakeTimeout   = errors.New("handshake timeout")
+	ErrInvalidSignature   = errors.New("invalid handshake signature")
 )
 
 // AuthenticatedPQXDHClient extends PQXDH client with certificate authentication
 type AuthenticatedPQXDHClient struct {
 	pqxdhClient *pqxdh.PQXDHClient
 	certificate *x509.Certificate
-	privateKey  ed25519.PrivateKey
+	privateKey  *mldsa.PrivateKey
 	verifier    *certs.ClientCertificateVerifier
-	id          uuid.NullUUID // Optional client ID for identification
+	id          uuid.UUID // Optional client ID for identification
 }
 
 // AuthenticatedPQXDHServer extends PQXDH server with certificate authentication
 type AuthenticatedPQXDHServer struct {
 	pqxdhServer *pqxdh.PQXDHServer
 	certificate *x509.Certificate
-	privateKey  ed25519.PrivateKey
+	privateKey  *mldsa.PrivateKey
 	verifier    *certs.ClientCertificateVerifier // Unified approach for certificate verification
 }
 
 // NewAuthenticatedPQXDHClient creates a new authenticated PQXDH client
 // privKey should be the private key corresponding to the server's certificate
-func NewAuthenticatedPQXDHClient(cert *x509.Certificate, privKey ed25519.PrivateKey, verifier *certs.ClientCertificateVerifier, id uuid.NullUUID) (*AuthenticatedPQXDHClient, error) {
+func NewAuthenticatedPQXDHClient(cert *x509.Certificate, privKey *mldsa.PrivateKey, verifier *certs.ClientCertificateVerifier, id uuid.UUID) (*AuthenticatedPQXDHClient, error) {
 	pqxdhClient, err := pqxdh.NewPQXDHClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PQXDH client: %w", err)
@@ -60,7 +57,7 @@ func NewAuthenticatedPQXDHClient(cert *x509.Certificate, privKey ed25519.Private
 
 // NewAuthenticatedPQXDHServer creates a new authenticated PQXDH server
 // privKey should be the private key corresponding to the server's certificate
-func NewAuthenticatedPQXDHServer(cert *x509.Certificate, privKey ed25519.PrivateKey, verifier *certs.ClientCertificateVerifier) (*AuthenticatedPQXDHServer, error) {
+func NewAuthenticatedPQXDHServer(cert *x509.Certificate, privKey *mldsa.PrivateKey, verifier *certs.ClientCertificateVerifier) (*AuthenticatedPQXDHServer, error) {
 	pqxdhServer, err := pqxdh.NewPQXDHServer()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PQXDH server: %w", err)

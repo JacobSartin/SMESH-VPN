@@ -214,8 +214,7 @@ func BenchmarkEncrypt(b *testing.B) {
 		b.Fatalf("Failed to generate random plaintext: %v", err)
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := aesInstance.Encrypt(plaintext)
 		if err != nil {
 			b.Fatalf("Encryption failed: %v", err)
@@ -249,8 +248,7 @@ func BenchmarkDecrypt(b *testing.B) {
 		b.Fatalf("Failed to encrypt plaintext: %v", err)
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := aesInstance.Decrypt(ciphertext)
 		if err != nil {
 			b.Fatalf("Decryption failed: %v", err)

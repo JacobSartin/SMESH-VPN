@@ -34,11 +34,6 @@ func ServerKeyExchange(clientPQPubKey *mlkem.EncapsulationKey768, clientECPubKey
 
 	pqSharedSecret, ciphertext := clientPQPubKey.Encapsulate()
 
-	// combine the secrets
-	combinedSecret := make([]byte, len(pqSharedSecret)+len(ecSharedSecret[:]))
-	copy(combinedSecret, pqSharedSecret)
-	copy(combinedSecret[len(pqSharedSecret):], ecSharedSecret[:])
-
 	key, err = KeyGen(ecSharedSecret, pqSharedSecret)
 	if err != nil {
 		return nil, nil, fmt.Errorf("key generation failed: %w", err)

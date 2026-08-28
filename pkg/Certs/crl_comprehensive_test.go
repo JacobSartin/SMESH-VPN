@@ -1,8 +1,7 @@
 package certs
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
+	"crypto/mldsa"
 	"crypto/x509"
 	"fmt"
 	"math/big"
@@ -22,14 +21,14 @@ func TestCertificateAuthorityWithCRL(t *testing.T) {
 	crlManager := ca.GetCRLManager()
 
 	// Generate a client key pair
-	clientPub, _, err := ed25519.GenerateKey(rand.Reader)
+	clientKey, err := mldsa.GenerateKey(mldsa.MLDSA44())
 	if err != nil {
 		t.Fatalf("Failed to generate client key pair: %v", err)
 	}
 
 	// Issue a certificate for the client
 	clientID := "test-client-1"
-	certDER, err := ca.IssueClientCertificate(clientPub, clientID)
+	certDER, err := ca.IssueClientCertificate(clientKey.PublicKey(), clientID)
 	if err != nil {
 		t.Fatalf("Failed to issue client certificate: %v", err)
 	}
@@ -125,12 +124,12 @@ func TestRevokeCertificateBySerial(t *testing.T) {
 	var certificates []*x509.Certificate
 
 	for _, clientID := range clientIDs {
-		clientPub, _, err := ed25519.GenerateKey(rand.Reader)
+		clientKey, err := mldsa.GenerateKey(mldsa.MLDSA44())
 		if err != nil {
 			t.Fatalf("Failed to generate client key pair: %v", err)
 		}
 
-		certDER, err := ca.IssueClientCertificate(clientPub, clientID)
+		certDER, err := ca.IssueClientCertificate(clientKey.PublicKey(), clientID)
 		if err != nil {
 			t.Fatalf("Failed to issue client certificate: %v", err)
 		}
@@ -199,13 +198,13 @@ func TestCRLValidityAndExpiration(t *testing.T) {
 	crlManager := ca.GetCRLManager()
 
 	// Generate and issue a client certificate
-	clientPub, _, err := ed25519.GenerateKey(rand.Reader)
+	clientKey, err := mldsa.GenerateKey(mldsa.MLDSA44())
 	if err != nil {
 		t.Fatalf("Failed to generate client key pair: %v", err)
 	}
 
 	clientID := "test-client"
-	certDER, err := ca.IssueClientCertificate(clientPub, clientID)
+	certDER, err := ca.IssueClientCertificate(clientKey.PublicKey(), clientID)
 	if err != nil {
 		t.Fatalf("Failed to issue client certificate: %v", err)
 	}
@@ -274,7 +273,7 @@ func TestMultipleCertificateRevocations(t *testing.T) {
 	certificates := make([]*x509.Certificate, numCerts)
 
 	for i := 0; i < numCerts; i++ {
-		clientPub, _, err := ed25519.GenerateKey(rand.Reader)
+		clientKey, err := mldsa.GenerateKey(mldsa.MLDSA44())
 		if err != nil {
 			t.Fatalf("Failed to generate client key pair: %v", err)
 		}
@@ -282,7 +281,7 @@ func TestMultipleCertificateRevocations(t *testing.T) {
 		clientID := fmt.Sprintf("client-%d", i)
 		clientIDs[i] = clientID
 
-		certDER, err := ca.IssueClientCertificate(clientPub, clientID)
+		certDER, err := ca.IssueClientCertificate(clientKey.PublicKey(), clientID)
 		if err != nil {
 			t.Fatalf("Failed to issue client certificate: %v", err)
 		}

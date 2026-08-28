@@ -1,7 +1,7 @@
 package certs
 
 import (
-	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -56,15 +56,6 @@ func (cv *ClientCertificateVerifier) VerifyPeerCertificate(certDER []byte) (*x50
 	_, err = cert.Verify(opts)
 	if err != nil {
 		return nil, fmt.Errorf("certificate verification failed: %w", err)
-	}
-
-	// Check if certificate is expired
-	now := time.Now()
-	if now.Before(cert.NotBefore) {
-		return nil, fmt.Errorf("certificate not yet valid")
-	}
-	if now.After(cert.NotAfter) {
-		return nil, fmt.Errorf("certificate expired")
 	}
 
 	// Check certificate revocation if CRL checking is enabled
@@ -130,13 +121,13 @@ func (cv *ClientCertificateVerifier) VerifyHandshakeWithFingerprint(
 	}
 
 	// Get the public key from the certificate
-	pubKey, ok := cert.PublicKey.(ed25519.PublicKey)
+	pubKey, ok := cert.PublicKey.(*mldsa.PublicKey)
 	if !ok {
-		return false, fmt.Errorf("certificate does not contain an Ed25519 public key")
+		return false, fmt.Errorf("certificate does not contain an ML-DSA public key")
 	}
 
 	// Verify the signature
-	return ed25519.Verify(pubKey, handshakeData, signature), nil
+	return mldsa.Verify(pubKey, handshakeData, signature, nil) == nil, nil
 }
 
 // GetTrustedFingerprints returns a copy of all trusted fingerprints

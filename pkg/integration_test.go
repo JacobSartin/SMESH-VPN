@@ -183,9 +183,8 @@ func TestPQXDHToAESWithTamper(t *testing.T) {
 
 // BenchmarkPQXDHKeyExchange benchmarks the key exchange process
 func BenchmarkPQXDHKeyExchange(b *testing.B) {
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		// Create client and server instances
 		client, err := pqxdh.NewPQXDHClient()
 		if err != nil {
@@ -223,9 +222,7 @@ func BenchmarkFullProtocol(b *testing.B) {
 		b.Fatalf("Failed to generate random packet: %v", err)
 	}
 
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		// Create client and server instances
 		client, err := pqxdh.NewPQXDHClient()
 		if err != nil {

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
 	session "github.com/JacobSartin/SMESH-VPN/pkg/Session"
-	"github.com/google/uuid"
 )
 
 var (
@@ -54,7 +54,7 @@ func NewDiscoveryServer(manager *session.SessionManager, ttl time.Duration) *Dis
 
 // RegisterPeer adds or refreshes a peer in the registry.
 func (ds *DiscoveryServer) RegisterPeer(id uuid.UUID, address string) (PeerRecord, error) {
-	if id == uuid.Nil {
+	if id == uuid.Nil() {
 		return PeerRecord{}, errInvalidPeerID
 	}
 	if strings.TrimSpace(address) == "" {
@@ -92,7 +92,7 @@ func (ds *DiscoveryServer) ListPeers(exclude uuid.UUID) []PeerRecord {
 
 	peers := make([]PeerRecord, 0, len(ds.peers))
 	for id, record := range ds.peers {
-		if exclude != uuid.Nil && id == exclude {
+		if exclude != uuid.Nil() && id == exclude {
 			continue
 		}
 		peers = append(peers, record)
@@ -200,6 +200,7 @@ func (ds *DiscoveryServer) handlePeerByID(w http.ResponseWriter, r *http.Request
 			return
 		}
 		writeJSON(w, http.StatusOK, record)
+	// TODO - this is unsecured, should be protected
 	case http.MethodDelete:
 		if !ds.RemovePeer(id) {
 			http.Error(w, errPeerNotFound.Error(), http.StatusNotFound)
@@ -211,7 +212,7 @@ func (ds *DiscoveryServer) handlePeerByID(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, value interface{}) {
+func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(value); err != nil {

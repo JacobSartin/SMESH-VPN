@@ -5,9 +5,9 @@ import (
 	"log"
 	"net"
 	"time"
+	"uuid"
 
 	session "github.com/JacobSartin/SMESH-VPN/pkg/Session"
-	"github.com/google/uuid"
 )
 
 func main() {
@@ -48,17 +48,9 @@ func main() {
 		log.Fatalf("Failed to resolve server address: %v", err)
 	}
 
-	serverID, err := uuid.NewV7()
-	if err != nil {
-		log.Fatalf("Failed to generate server peer ID: %v", err)
-	}
-
 	// Create peer info for the server
 	serverPeerInfo := session.PeerInfo{
-		ID: uuid.NullUUID{
-			UUID:  serverID,
-			Valid: true,
-		},
+		ID:       uuid.NewV7(),
 		Address:  tcpAddr,
 		LastSeen: time.Now(),
 	}

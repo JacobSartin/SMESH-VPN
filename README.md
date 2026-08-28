@@ -16,13 +16,13 @@ A mesh VPN with Post-Quantum Cryptography.
 - Post-quantum secure key exchange using hybrid classical/post-quantum cryptography
 - End-to-end encrypted communication between nodes
 - Mesh topology allowing direct peer-to-peer connections
-- Certificate-based identity system for secure authentication
+- ML-DSA-44 certificate-based identity and handshake authentication
 - Protection against MITM attacks during key exchange
 - Automatic peer discovery through a central discovery server
 
 ## Requirements
 
-- Go 1.20+
+- Go 1.27+
 - For TUN/TAP interface: Appropriate drivers for your OS
 
 ## Installation
