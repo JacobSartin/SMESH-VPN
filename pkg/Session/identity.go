@@ -4,7 +4,6 @@ import (
 	"crypto/mldsa"
 	"crypto/x509"
 	"errors"
-	"strings"
 	"sync"
 	"time"
 	"uuid"
@@ -64,15 +63,10 @@ func (c *ClientIdentity) LoadCertificate(certData []byte) error {
 
 	c.Certificate = cert
 
-	// If certificate has a subject with CommonName, use it as ID
-	if cert.Subject.CommonName != "" {
-		clientID := strings.TrimPrefix(cert.Subject.CommonName, certs.ClientCommonNamePrefix)
-		id, err := uuid.Parse(clientID)
-		if err == nil {
-			c.ID = id
-		} else {
-			c.ID = uuid.Nil()
-		}
+	if id, err := certs.ClientIDFromCertificate(cert); err == nil {
+		c.ID = id
+	} else {
+		c.ID = uuid.Nil()
 	}
 
 	// Set expiration time from certificate

@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
+	"strings"
 	"sync"
 	"time"
 	"uuid"
@@ -19,6 +21,7 @@ var (
 	ErrCertificateNotFound        = errors.New("certificate not found")
 	ErrCertificateAlreadyExists   = errors.New("certificate already exists")
 	ErrCertificateAuthorityLocked = errors.New("certificate authority is locked")
+	ErrInvalidClientIdentity      = errors.New("certificate does not contain a valid client identity")
 )
 
 // ErrCertificateRevoked is returned when a certificate is found to be revoked
@@ -26,6 +29,19 @@ var ErrCertificateRevoked = errors.New("certificate has been revoked")
 
 // ClientCommonNamePrefix prefixes client IDs in issued certificate subjects.
 const ClientCommonNamePrefix = "SMESH-VPN-Client-"
+
+// ClientIDFromCertificate extracts the UUID identity bound into a client
+// certificate issued by this package.
+func ClientIDFromCertificate(cert *x509.Certificate) (uuid.UUID, error) {
+	if cert == nil || !strings.HasPrefix(cert.Subject.CommonName, ClientCommonNamePrefix) {
+		return uuid.Nil(), ErrInvalidClientIdentity
+	}
+	id, err := uuid.Parse(strings.TrimPrefix(cert.Subject.CommonName, ClientCommonNamePrefix))
+	if err != nil || id == uuid.Nil() {
+		return uuid.Nil(), ErrInvalidClientIdentity
+	}
+	return id, nil
+}
 
 // CertificateAuthority will be used by the discovery server to manage certificates
 // this will sign certificates for clients
@@ -178,6 +194,48 @@ func (ca *CertificateAuthority) IssueClientCertificate(clientPubKey *mldsa.Publi
 	return certDER, nil
 }
 
+// IssueServerCertificate creates a TLS certificate for the discovery service.
+func (ca *CertificateAuthority) IssueServerCertificate(serverPubKey *mldsa.PublicKey, serverID string, dnsNames []string, ipAddresses []net.IP) ([]byte, error) {
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+
+	if ca.IsLocked {
+		return nil, ErrCertificateAuthorityLocked
+	}
+
+	certificateID := "server:" + serverID
+	if _, exists := ca.Certificates[certificateID]; exists {
+		return nil, ErrCertificateAlreadyExists
+	}
+
+	serialNumber := new(big.Int).Set(ca.nextSerialNumber)
+	ca.nextSerialNumber = new(big.Int).Add(ca.nextSerialNumber, big.NewInt(1))
+	template := &x509.Certificate{
+		SerialNumber:          serialNumber,
+		Subject:               pkix.Name{CommonName: "SMESH-VPN-Discovery-" + serverID},
+		DNSNames:              dnsNames,
+		IPAddresses:           ipAddresses,
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(30 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+		SignatureAlgorithm:    x509.MLDSA44,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, ca.Certificate, serverPubKey, ca.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create server certificate: %w", err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse server certificate: %w", err)
+	}
+	ca.Certificates[certificateID] = cert
+	return certDER, nil
+}
+
 // GetCACertificate returns the CA certificate in DER format for distribution to clients
 func (ca *CertificateAuthority) GetCACertificate() ([]byte, error) {
 	ca.mu.RLock()
@@ -201,7 +259,8 @@ func (ca *CertificateAuthority) ValidateClientCertificate(cert *x509.Certificate
 
 	// Verify the certificate
 	opts := x509.VerifyOptions{
-		Roots: roots,
+		Roots:     roots,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
 
 	_, err := cert.Verify(opts)
