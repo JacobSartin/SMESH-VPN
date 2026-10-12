@@ -7,108 +7,81 @@
 ╚══════╝╚═╝     ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝      ╚═══╝  ╚═╝     ╚═╝  ╚═══╝
 ```
 
-# Post-Quantum Mesh VPN Client
+# SMESH-VPN
 
-A mesh VPN with Post-Quantum Cryptography.
+A mesh VPN prototype in Go built around a hybrid post-quantum handshake:
+X25519 + ML-KEM-768 key agreement, ML-DSA-44 certificates for identity, and
+AES-256-GCM for session traffic. It uses only the Go standard library.
 
-## Features
+## Status
 
-- Post-quantum secure key exchange using hybrid classical/post-quantum cryptography
-- End-to-end encrypted communication between nodes
-- Mesh topology allowing direct peer-to-peer connections
-- ML-DSA-44 certificate-based identity and handshake authentication
-- Protection against MITM attacks during key exchange
-- Automatic peer discovery through a central discovery server
+The control-plane pieces are implemented and tested. The data plane is not
+built yet, so SMESH-VPN does not carry IP traffic today.
 
-## Requirements
+Working:
 
-- Go 1.27+
-- For TUN/TAP interface: Appropriate drivers for your OS
+- Hybrid PQXDH key exchange (X25519 + ML-KEM-768); see [pkg/PQXDH](pkg/PQXDH/README.md)
+- ML-DSA-44 certificate authority: client and server certificate issuance,
+  verification, and revocation lists
+- Certificate-authenticated handshake, plus a temporary unauthenticated mode
+  used while connection setup is being built out
+- Session manager with AES-256-GCM sessions, idle cleanup, and lifecycle events
+- Discovery server with an HTTP API over mutual TLS for registering, listing,
+  looking up, and removing peers
 
-## Installation
+In progress:
 
-1. Clone the repository:
+- TUN interface and packet forwarding (the data plane)
+- Wiring the client to the discovery API for automatic peer connections
+- Rekeying, configuration flags, and reconnect handling
 
-   ```bash
-   git clone https://github.com/JacobSartin/SMESH-VPN.git
-   cd SMESH-VPN
-   ```
+[STATUS.md](STATUS.md) has the detailed list of gaps and known weaknesses.
 
-2. Build the binaries:
+## Layout
 
-   ```bash
-   # If using Windows with WSL for Make
-   wsl make
+| Path | Contents |
+| --- | --- |
+| `cmd/Server` | Session listener (`:8080`) and discovery API (`:8081`, mutual TLS) |
+| `cmd/Client` | Test client that opens a session to a local server |
+| `pkg/PQXDH` | Hybrid key exchange |
+| `pkg/Auth` | Authenticated handshake messages and signatures |
+| `pkg/Certs` | Certificate authority, client verification, CRLs |
+| `pkg/Session` | Sessions, session manager, node identity |
+| `pkg/AES` | AES-256-GCM wrapper |
+| `pkg/Network` | Length-prefixed message framing |
 
-   # If using native Make
-   make
-   ```
+## Building
 
-   This will create both client and server binaries for Windows and Linux in the `bin/` directory.
-
-## Certificate Setup
-
-SMESH-VPN uses certificate-based authentication to ensure that only authorized clients can connect to the network and to protect against MITM attacks.
-
-(Certificate management functionality is in development.)
-
-## Running the Discovery Server
-
-Start the discovery server:
-
-```bash
-# Linux
-./bin/smesh-server_linux_amd64.exe
-
-# Windows
-.\bin\smesh-server_windows_amd64.exe
-```
-
-## Running a Client
-
-Start a VPN client:
+Requires Go 1.27 or newer (the code uses the standard library's `crypto/mldsa`
+and `uuid` packages).
 
 ```bash
-# Linux
-./bin/smesh-client_linux_amd64.exe
-
-# Windows
-.\bin\smesh-client_windows_amd64.exe
+make
 ```
 
-Configuration options will be available through command line flags or a configuration file.
+This builds Linux and Windows binaries for the client and server into `bin/`.
 
-## Security Considerations
+## Running
 
-- The certificates are used to authenticate clients during connection establishment
-- All key exchanges are protected against MITM attacks
-- Only authorized clients with valid certificates can connect to the VPN
-- The discovery server validates client certificates before allowing connections
-- All data exchanged between peers is end-to-end encrypted
-
-## Docker Support
-
-You can also run the VPN components in Docker:
+Start the server, then the client in another terminal:
 
 ```bash
-docker-compose up -d
+./bin/smesh-server_linux_amd64
+./bin/smesh-client_linux_amd64
 ```
+
+On Windows, use the `.exe` binaries in `bin\`. The client connects to
+`localhost:8080` and establishes a session using the unauthenticated handshake.
 
 ## Testing
 
-Run the tests:
-
 ```bash
-# Run all tests
+go vet ./...
 go test ./...
-
-# Run tests for a specific package
-go test ./pkg/PQXDH
-
-# Run tests with coverage
-go test -cover ./...
 ```
+
+CI runs both on every push and pull request.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT. See [LICENSE](LICENSE).
