@@ -14,8 +14,8 @@ Each finding that has a test points at a `review_test.go` file. Those tests are 
 | 4 | High | cmd/Server | Mesh listener on :8080 runs unauthenticated while discovery API requires mTLS | none (by design for now, see note) |
 | 5 | Medium | Certs | Peer verifier accepts any CA-signed cert, including the TLS server cert | `pkg/Auth/review_test.go` TestPeerVerifierRejectsNonClientCertificates |
 | 6 | Medium | Certs | Re-revoking a re-issued client ID un-revokes the earlier serial | `pkg/Certs/review_test.go` TestReissuedClientKeepsEarlierSerialRevoked |
-| 7 | Medium | Session | Handshake has no deadline; silent peers pin goroutines forever | `pkg/Session/review_test.go` TestHandshakeHasDeadline |
-| 8 | Medium | Session | Duplicate peer IDs corrupt `sessionsByPeerID` on removal | `pkg/Session/review_test.go` TestRemovingOldSessionKeepsLookupForNewerSessionWithSamePeerID |
+| 7 | Medium | Session | Handshake has no deadline; silent peers pin goroutines forever | `pkg/Session/review_test.go` TestHandshakeArmsReadDeadline |
+| 8 | Medium | Session | Duplicate peer IDs corrupt `sessionsByPeerID` on removal | `pkg/Session/review_test.go` TestPeerLookupStaysConsistentWhenPeerIDsCollide |
 | 9 | Medium | Session | Idle cleanup never emits a Disconnected event | `pkg/Session/review_test.go` TestIdleCleanupEmitsDisconnectedEvent |
 | 10 | Medium | Discovery | Registered address is self-asserted and unvalidated | none |
 | 11 | Low | Auth | Signed transcript concatenates variable-length fields without framing | none |
@@ -172,8 +172,8 @@ pkg/Auth     TestResponseIsBoundToTheHelloItAnswers
 pkg/Auth     TestPeerVerifierRejectsNonClientCertificates
 pkg/Session  TestDataChannelRejectsReplayAndReflection
 pkg/Session  TestIdleCleanupEmitsDisconnectedEvent
-pkg/Session  TestRemovingOldSessionKeepsLookupForNewerSessionWithSamePeerID
-pkg/Session  TestHandshakeHasDeadline
+pkg/Session  TestPeerLookupStaysConsistentWhenPeerIDsCollide
+pkg/Session  TestHandshakeArmsReadDeadline
 pkg/Certs    TestReissuedClientKeepsEarlierSerialRevoked
 ```
 
