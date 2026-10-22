@@ -1,4 +1,7 @@
-package main
+// Package discovery implements the coordination server peers register with and
+// the client they use to talk to it. All requests are authenticated with
+// mutual TLS; a peer's identity is the client ID in its certificate.
+package discovery
 
 import (
 	"context"
@@ -14,75 +17,92 @@ import (
 	"uuid"
 
 	certs "github.com/JacobSartin/SMESH-VPN/pkg/Certs"
-	session "github.com/JacobSartin/SMESH-VPN/pkg/Session"
 )
 
 var (
 	errInvalidPeerID       = errors.New("invalid peer id")
 	errInvalidPeerAddress  = errors.New("invalid peer address")
+	errInvalidVPNIP        = errors.New("vpn_ip must be a unicast IPv4 address")
+	errVPNIPInUse          = errors.New("vpn_ip is already registered to another peer")
 	errPeerNotFound        = errors.New("peer not found")
 	errPeerUnauthenticated = errors.New("a valid client certificate is required")
 )
 
 // PeerRecord is the discovery server's public view of a registered peer.
 type PeerRecord struct {
-	ID       uuid.UUID      `json:"id"`
-	Address  netip.AddrPort `json:"address"`
-	LastSeen time.Time      `json:"last_seen"`
+	ID uuid.UUID `json:"id"`
+	// Address is the endpoint other peers dial to reach this peer.
+	Address netip.AddrPort `json:"address"`
+	// VPNIP is the peer's address inside the overlay network.
+	VPNIP    netip.Addr `json:"vpn_ip"`
+	LastSeen time.Time  `json:"last_seen"`
 }
 
-type peerRegistrationRequest struct {
+// RegistrationRequest is the body of POST /peers. An unspecified Address host
+// (for example 0.0.0.0:7777) is replaced with the request's source IP.
+type RegistrationRequest struct {
 	Address netip.AddrPort `json:"address"`
+	VPNIP   netip.Addr     `json:"vpn_ip"`
 }
 
 type peerIDContextKey struct{}
 
-// DiscoveryServer coordinates peers by keeping a small in-memory registry.
-type DiscoveryServer struct {
-	manager *session.SessionManager
-	ca      *certs.CertificateAuthority
-	ttl     time.Duration
-	now     func() time.Time
+// Server coordinates peers by keeping a small in-memory registry.
+type Server struct {
+	ca  *certs.CertificateAuthority
+	ttl time.Duration
+	now func() time.Time
 
-	mu    sync.RWMutex
+	mu    sync.Mutex
 	peers map[uuid.UUID]PeerRecord
 }
 
-// NewDiscoveryServer creates an in-memory discovery server.
-func NewDiscoveryServer(manager *session.SessionManager, ca *certs.CertificateAuthority, ttl time.Duration) *DiscoveryServer {
-	return &DiscoveryServer{
-		manager: manager,
-		ca:      ca,
-		ttl:     ttl,
-		now:     time.Now,
-		peers:   make(map[uuid.UUID]PeerRecord),
+// NewServer creates an in-memory discovery server. Peers that do not refresh
+// their registration within ttl are dropped.
+func NewServer(ca *certs.CertificateAuthority, ttl time.Duration) *Server {
+	return &Server{
+		ca:    ca,
+		ttl:   ttl,
+		now:   time.Now,
+		peers: make(map[uuid.UUID]PeerRecord),
 	}
 }
 
 // RegisterPeer adds or refreshes the peer identified by its verified certificate.
-func (ds *DiscoveryServer) RegisterPeer(id uuid.UUID, address netip.AddrPort) (PeerRecord, error) {
+func (ds *Server) RegisterPeer(id uuid.UUID, address netip.AddrPort, vpnIP netip.Addr) (PeerRecord, error) {
 	if id == uuid.Nil() {
 		return PeerRecord{}, errInvalidPeerID
 	}
-	if !address.IsValid() || address.Port() == 0 {
+	if !address.IsValid() || address.Port() == 0 || address.Addr().IsUnspecified() {
 		return PeerRecord{}, errInvalidPeerAddress
+	}
+	vpnIP = vpnIP.Unmap()
+	if !vpnIP.Is4() || vpnIP.IsUnspecified() || vpnIP.IsMulticast() || vpnIP.IsLoopback() {
+		return PeerRecord{}, errInvalidVPNIP
+	}
+
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+
+	ds.cleanupExpiredLocked()
+	for otherID, other := range ds.peers {
+		if otherID != id && other.VPNIP == vpnIP {
+			return PeerRecord{}, errVPNIPInUse
+		}
 	}
 
 	record := PeerRecord{
 		ID:       id,
 		Address:  address,
+		VPNIP:    vpnIP,
 		LastSeen: ds.now(),
 	}
-
-	ds.mu.Lock()
 	ds.peers[id] = record
-	ds.mu.Unlock()
-
 	return record, nil
 }
 
 // GetPeer returns a peer by ID.
-func (ds *DiscoveryServer) GetPeer(id uuid.UUID) (PeerRecord, bool) {
+func (ds *Server) GetPeer(id uuid.UUID) (PeerRecord, bool) {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
@@ -95,12 +115,11 @@ func (ds *DiscoveryServer) GetPeer(id uuid.UUID) (PeerRecord, bool) {
 }
 
 // ListPeers returns all non-expired peers except the optional excluded peer.
-func (ds *DiscoveryServer) ListPeers(exclude uuid.UUID) []PeerRecord {
-	ds.CleanupExpired()
+func (ds *Server) ListPeers(exclude uuid.UUID) []PeerRecord {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
 
-	ds.mu.RLock()
-	defer ds.mu.RUnlock()
-
+	ds.cleanupExpiredLocked()
 	peers := make([]PeerRecord, 0, len(ds.peers))
 	for id, record := range ds.peers {
 		if exclude != uuid.Nil() && id == exclude {
@@ -117,7 +136,7 @@ func (ds *DiscoveryServer) ListPeers(exclude uuid.UUID) []PeerRecord {
 }
 
 // RemovePeer removes the peer identified by the authenticated request.
-func (ds *DiscoveryServer) RemovePeer(id uuid.UUID) error {
+func (ds *Server) RemovePeer(id uuid.UUID) error {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
@@ -132,36 +151,38 @@ func (ds *DiscoveryServer) RemovePeer(id uuid.UUID) error {
 }
 
 // CleanupExpired removes peers that have not refreshed before the TTL.
-func (ds *DiscoveryServer) CleanupExpired() {
-	if ds.ttl <= 0 {
-		return
-	}
-
-	cutoff := ds.now().Add(-ds.ttl)
-
+func (ds *Server) CleanupExpired() {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
+	ds.cleanupExpiredLocked()
+}
 
+func (ds *Server) cleanupExpiredLocked() {
 	for id, record := range ds.peers {
-		if record.LastSeen.Before(cutoff) {
+		if ds.expired(record) {
 			delete(ds.peers, id)
 		}
 	}
 }
 
-func (ds *DiscoveryServer) expired(record PeerRecord) bool {
+func (ds *Server) expired(record PeerRecord) bool {
 	return ds.ttl > 0 && record.LastSeen.Before(ds.now().Add(-ds.ttl))
 }
 
-// Handler returns the HTTP API for discovery coordination.
-func (ds *DiscoveryServer) Handler() http.Handler {
+// Handler returns the HTTP API for discovery coordination:
+//
+//	POST   /peers       register or refresh the caller
+//	GET    /peers       list live peers other than the caller
+//	DELETE /peers       deregister the caller
+//	GET    /peers/{id}  look up one peer
+func (ds *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/peers", ds.handlePeers)
 	mux.HandleFunc("/peers/", ds.handlePeerByID)
 	return ds.requireClientCertificate(mux)
 }
 
-func (ds *DiscoveryServer) requireClientCertificate(next http.Handler) http.Handler {
+func (ds *Server) requireClientCertificate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ds.ca == nil || r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 			http.Error(w, errPeerUnauthenticated.Error(), http.StatusUnauthorized)
@@ -182,10 +203,10 @@ func (ds *DiscoveryServer) requireClientCertificate(next http.Handler) http.Hand
 	})
 }
 
-func (ds *DiscoveryServer) handlePeers(w http.ResponseWriter, r *http.Request) {
+func (ds *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		ds.handleListPeers(w, r)
+		writeJSON(w, http.StatusOK, ds.ListPeers(authenticatedPeerID(r)))
 	case http.MethodPost:
 		ds.handleRegisterPeer(w, r)
 	case http.MethodDelete:
@@ -195,7 +216,7 @@ func (ds *DiscoveryServer) handlePeers(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (ds *DiscoveryServer) handleRemovePeer(w http.ResponseWriter, r *http.Request) {
+func (ds *Server) handleRemovePeer(w http.ResponseWriter, r *http.Request) {
 	if err := ds.RemovePeer(authenticatedPeerID(r)); err != nil {
 		if errors.Is(err, errPeerNotFound) {
 			http.Error(w, err.Error(), http.StatusNotFound)
@@ -207,8 +228,8 @@ func (ds *DiscoveryServer) handleRemovePeer(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (ds *DiscoveryServer) handleRegisterPeer(w http.ResponseWriter, r *http.Request) {
-	var req peerRegistrationRequest
+func (ds *Server) handleRegisterPeer(w http.ResponseWriter, r *http.Request) {
+	var req RegistrationRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
@@ -216,30 +237,30 @@ func (ds *DiscoveryServer) handleRegisterPeer(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	record, err := ds.RegisterPeer(authenticatedPeerID(r), req.Address)
+	address := req.Address
+	if address.IsValid() && address.Addr().IsUnspecified() {
+		source, err := netip.ParseAddrPort(r.RemoteAddr)
+		if err != nil {
+			http.Error(w, "cannot determine source address", http.StatusBadRequest)
+			return
+		}
+		address = netip.AddrPortFrom(source.Addr().Unmap(), address.Port())
+	}
+
+	record, err := ds.RegisterPeer(authenticatedPeerID(r), address, req.VPNIP)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		status := http.StatusBadRequest
+		if errors.Is(err, errVPNIPInUse) {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, record)
+	writeJSON(w, http.StatusOK, record)
 }
 
-func (ds *DiscoveryServer) handleListPeers(w http.ResponseWriter, r *http.Request) {
-	var exclude uuid.UUID
-	if rawExclude := r.URL.Query().Get("exclude"); rawExclude != "" {
-		parsed, err := uuid.Parse(rawExclude)
-		if err != nil {
-			http.Error(w, "invalid exclude peer id", http.StatusBadRequest)
-			return
-		}
-		exclude = parsed
-	}
-
-	writeJSON(w, http.StatusOK, ds.ListPeers(exclude))
-}
-
-func (ds *DiscoveryServer) handlePeerByID(w http.ResponseWriter, r *http.Request) {
+func (ds *Server) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(strings.TrimPrefix(r.URL.Path, "/peers/"))
 	if err != nil {
 		http.Error(w, "invalid peer id", http.StatusBadRequest)
@@ -267,7 +288,5 @@ func authenticatedPeerID(r *http.Request) uuid.UUID {
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		http.Error(w, fmt.Sprintf("failed to encode response: %v", err), http.StatusInternalServerError)
-	}
+	_ = json.NewEncoder(w).Encode(value)
 }

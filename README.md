@@ -7,107 +7,108 @@
 ╚══════╝╚═╝     ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝      ╚═══╝  ╚═╝     ╚═╝  ╚═══╝
 ```
 
-# Post-Quantum Mesh VPN Client
+# Post-Quantum Mesh VPN
 
-A mesh VPN with Post-Quantum Cryptography.
+A mesh VPN whose peer sessions are established with a hybrid classical/post-quantum key exchange and authenticated with post-quantum certificates.
 
-## Features
+## Status
 
-- Post-quantum secure key exchange using hybrid classical/post-quantum cryptography
-- End-to-end encrypted communication between nodes
-- Mesh topology allowing direct peer-to-peer connections
-- ML-DSA-44 certificate-based identity and handshake authentication
-- Protection against MITM attacks during key exchange
-- Automatic peer discovery through a central discovery server
+This is an MVP. Two or more Linux peers that can reach each other directly (no NAT or firewall between them) can join an overlay network coordinated by a discovery server. See [docs/MVP_PLAN.md](docs/MVP_PLAN.md) for what's in scope and what's deliberately deferred.
+
+## How it works
+
+- **Identity:** an offline CA issues each peer an ML-DSA-44 certificate. The peer's ID is the UUID in that certificate.
+- **Discovery:** peers register their endpoint and overlay IP with the discovery server over mutual TLS (ML-DSA certificates on both sides). Registrations expire unless refreshed.
+- **Sessions:** peers connect directly over TCP. The handshake is X25519 + ML-KEM-768 (PQXDH-style), signed with each peer's ML-DSA key. Traffic is encrypted with AES-256-GCM. For each pair, the peer with the lower ID dials, so there is one session per pair.
+- **Data plane:** each peer has a TUN interface. IPv4 packets for another peer's overlay IP go through that peer's session. Packets whose source address doesn't belong to the sending peer are dropped.
 
 ## Requirements
 
 - Go 1.27+
-- For TUN/TAP interface: Appropriate drivers for your OS
+- Clients: Linux, root or `CAP_NET_ADMIN`, and the `ip` command
+- The discovery server runs on any OS
 
-## Installation
-
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/JacobSartin/SMESH-VPN.git
-   cd SMESH-VPN
-   ```
-
-2. Build the binaries:
-
-   ```bash
-   # If using Windows with WSL for Make
-   wsl make
-
-   # If using native Make
-   make
-   ```
-
-   This will create both client and server binaries for Windows and Linux in the `bin/` directory.
-
-## Certificate Setup
-
-SMESH-VPN uses certificate-based authentication to ensure that only authorized clients can connect to the network and to protect against MITM attacks.
-
-(Certificate management functionality is in development.)
-
-## Running the Discovery Server
-
-Start the discovery server:
+## Build
 
 ```bash
-# Linux
-./bin/smesh-server_linux_amd64.exe
-
-# Windows
-.\bin\smesh-server_windows_amd64.exe
+make            # Linux and Windows binaries into bin/
+make test       # go vet + go test
 ```
 
-## Running a Client
+Or build directly, for example `go build -o bin/smesh-client ./cmd/Client`.
 
-Start a VPN client:
+## Quick start
+
+### 1. Create the CA and issue client identities
+
+Do this on a trusted machine and keep `ca/ca.key` private.
 
 ```bash
-# Linux
-./bin/smesh-client_linux_amd64.exe
-
-# Windows
-.\bin\smesh-client_windows_amd64.exe
+smesh-server init-ca -dir ca
+smesh-server issue-client -ca-dir ca -out alice
+smesh-server issue-client -ca-dir ca -out bob
 ```
 
-Configuration options will be available through command line flags or a configuration file.
+Each output directory holds `client.crt`, `client.key`, and `ca.crt`. Copy it to the matching peer. Client certificates are valid for 30 days.
 
-## Security Considerations
+### 2. Run the discovery server
 
-- The certificates are used to authenticate clients during connection establishment
-- All key exchanges are protected against MITM attacks
-- Only authorized clients with valid certificates can connect to the VPN
-- The discovery server validates client certificates before allowing connections
-- All data exchanged between peers is end-to-end encrypted
-
-## Docker Support
-
-You can also run the VPN components in Docker:
+`-hostname` / `-ip` must match the name or address clients use in their `-discovery` URL; they go into the server's TLS certificate.
 
 ```bash
-docker-compose up -d
+smesh-server serve -ca-dir ca -listen :8081 -ip 203.0.113.10
+```
+
+### 3. Run a client on each peer
+
+```bash
+sudo smesh-client -discovery https://203.0.113.10:8081 -dir alice -vpn-ip 10.77.0.2/24
+sudo smesh-client -discovery https://203.0.113.10:8081 -dir bob   -vpn-ip 10.77.0.3/24
+```
+
+Then `ping 10.77.0.3` from alice.
+
+Useful client flags:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-listen` | `:7777` | TCP address for incoming peer sessions |
+| `-advertise` | discovery server's view of this host, at the `-listen` port | endpoint other peers should dial |
+| `-tun` | `smesh0` | TUN interface name |
+| `-mtu` | `1400` | TUN MTU |
+
+### Try it on one machine
+
+With Docker: two clients on separate networks, a discovery server, and a router between them. The test pings every pair of clients. Settings and topologies are easy to change; see [docker/README.md](docker/README.md).
+
+```bash
+docker/test.sh          # or: make docker-test
+```
+
+Without Docker, on Linux: `scripts/netns-demo.sh` does the same with network namespaces.
+
+```bash
+make
+sudo scripts/netns-demo.sh bin
 ```
 
 ## Testing
 
-Run the tests:
-
 ```bash
-# Run all tests
 go test ./...
-
-# Run tests for a specific package
-go test ./pkg/PQXDH
-
-# Run tests with coverage
-go test -cover ./...
+go test -race ./...    # needs cgo
 ```
+
+The `pkg/Mesh` tests run a discovery server and two peers in process with in-memory TUN devices.
+
+## Current limitations
+
+- Linux clients only; no Windows TUN yet
+- No NAT traversal or relaying: peers must be able to dial each other directly
+- Tunnel over TCP (performance degrades under packet loss)
+- IPv4 overlay only; overlay IPs are chosen by each client and must be unique
+- Revocation (CRL) is implemented in the CA but not distributed to peers
+- Data frames have no replay protection beyond what TCP provides
 
 ## License
 

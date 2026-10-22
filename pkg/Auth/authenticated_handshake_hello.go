@@ -2,13 +2,14 @@ package auth
 
 import (
 	"crypto/mldsa"
-	"fmt"
+	"crypto/sha256"
 	"slices"
 	"time"
 	"uuid"
 )
 
-// AuthenticatedHandshakeMessage represents a PQXDH handshake message with certificate authentication
+// AuthenticatedHandshakeHello is the initiator's PQXDH hello, signed with the
+// key bound to its certificate.
 type AuthenticatedHandshakeHello struct {
 	// PQXDH public keys
 	PQPublicKey []byte `json:"pq_public_key"` // ML-KEM 768 public key
@@ -23,30 +24,28 @@ type AuthenticatedHandshakeHello struct {
 	// Timestamp to prevent replay attacks
 	Timestamp time.Time `json:"timestamp"`
 
-	// client ID
+	// ID is the initiator's client ID and must match its certificate.
 	ID uuid.UUID `json:"id"`
 }
 
-// Sign signs the handshake hello message with the provided private key.
-func (msg *AuthenticatedHandshakeHello) signatureData() ([]byte, error) {
-	timestampBytes, err := msg.Timestamp.MarshalBinary()
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal timestamp: %w", err)
-	}
-	parts := [][]byte{msg.PQPublicKey, msg.ECPublicKey, msg.Certificate, timestampBytes}
-	if msg.ID != uuid.Nil() {
-		parts = append(parts, msg.ID[:])
-	}
-	return slices.Concat(parts...), nil
+func (msg *AuthenticatedHandshakeHello) signatureData() []byte {
+	return slices.Concat(msg.PQPublicKey, msg.ECPublicKey, msg.Certificate, timestampBytes(msg.Timestamp), msg.ID[:])
 }
 
+// transcriptHash identifies this hello so the response signature can be bound to it.
+func (msg *AuthenticatedHandshakeHello) transcriptHash() []byte {
+	hash := sha256.Sum256(msg.signatureData())
+	return hash[:]
+}
+
+// Sign signs the handshake hello message with the provided private key.
 func (msg *AuthenticatedHandshakeHello) Sign(privateKey *mldsa.PrivateKey) error {
-	data, err := msg.signatureData()
+	signature, err := signHandshake(privateKey, msg.signatureData())
 	if err != nil {
 		return err
 	}
-	msg.Signature, err = signHandshake(privateKey, data)
-	return err
+	msg.Signature = signature
+	return nil
 }
 
 // Verify verifies the signature of the handshake hello message
@@ -54,9 +53,5 @@ func (msg *AuthenticatedHandshakeHello) Verify() error {
 	if !validHandshakeTime(msg.Timestamp) {
 		return ErrHandshakeTimeout
 	}
-	data, err := msg.signatureData()
-	if err != nil {
-		return err
-	}
-	return verifyHandshake(msg.Certificate, data, msg.Signature)
+	return verifyHandshake(msg.Certificate, msg.signatureData(), msg.Signature)
 }
