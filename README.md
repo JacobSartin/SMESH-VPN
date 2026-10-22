@@ -99,7 +99,24 @@ go test ./...
 go test -race ./...    # needs cgo
 ```
 
-The `pkg/Mesh` tests run a discovery server and two peers in process with in-memory TUN devices.
+The `pkg/Mesh` tests run a discovery server and two peers in process with in-memory TUN devices. CI runs `go vet`, `go test`, and the Makefile build on every push and pull request.
+
+## Layout
+
+| Path | Contents |
+| --- | --- |
+| `cmd/Server` | `smesh-server`: CA management (`init-ca`, `issue-client`) and the discovery server (`serve`) |
+| `cmd/Client` | `smesh-client`: joins the mesh |
+| `pkg/Mesh` | Peer connections and packet routing between the TUN device and sessions |
+| `pkg/Discovery` | Discovery server and client (HTTP over mutual TLS) |
+| `pkg/Session` | Sessions, session manager, node identity |
+| `pkg/Auth` | Authenticated handshake messages and signatures |
+| `pkg/PQXDH` | Hybrid key exchange; see [pkg/PQXDH](pkg/PQXDH/README.md) |
+| `pkg/Certs` | Certificate authority, storage, verification, CRLs |
+| `pkg/Tun` | Linux TUN device |
+| `pkg/AES` | AES-256-GCM wrapper |
+| `pkg/Network` | Length-prefixed message framing |
+| `docker/` | Docker test environment |
 
 ## Current limitations
 
@@ -112,4 +129,4 @@ The `pkg/Mesh` tests run a discovery server and two peers in process with in-mem
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT. See [LICENSE](LICENSE).

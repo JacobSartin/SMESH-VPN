@@ -19,7 +19,7 @@ All phases below are implemented. The four open decisions at the end were confir
 
 **Found by the Docker environment (`docker/`):** handshake signatures covered `time.Time.MarshalBinary`, whose bytes depend on the time zone. A sender whose `Local` zone is UTC (any container without tzdata) produced signatures that failed after the JSON round trip. Fixed by signing Unix nanoseconds, with a regression test.
 
-**Still open:** the README references a LICENSE file that doesn't exist yet.
+**LICENSE:** added on `main` (MIT).
 
 ## MVP definition
 
