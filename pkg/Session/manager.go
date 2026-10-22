@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
@@ -210,8 +211,9 @@ func (sm *SessionManager) removeWhere(match func(*Session) bool) {
 }
 
 // CreateSession dials a peer and adds the resulting session to the manager.
-func (sm *SessionManager) CreateSession(peerInfo PeerInfo) (*Session, error) {
-	session, err := NewSession(peerInfo, sm.Identity())
+// Cancelling ctx aborts the dial and handshake.
+func (sm *SessionManager) CreateSession(ctx context.Context, peerInfo PeerInfo) (*Session, error) {
+	session, err := NewSession(ctx, peerInfo, sm.Identity())
 	if err != nil {
 		return nil, err
 	}

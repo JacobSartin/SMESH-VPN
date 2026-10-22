@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -103,16 +104,19 @@ type Session struct {
 }
 
 // NewSession dials the peer and performs the key exchange. With an authenticated
-// identity, the peer's certificate must carry peer.ID.
-func NewSession(peer PeerInfo, identity *ClientIdentity) (*Session, error) {
+// identity, the peer's certificate must carry peer.ID. Cancelling ctx aborts
+// the dial and the handshake.
+func NewSession(ctx context.Context, peer PeerInfo, identity *ClientIdentity) (*Session, error) {
 	if peer.ID == uuid.Nil() || peer.Address == nil {
 		return nil, ErrInvalidPeer
 	}
 
-	conn, err := net.DialTimeout("tcp", peer.Address.String(), handshakeTimeout)
+	dialer := net.Dialer{Timeout: handshakeTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", peer.Address.String())
 	if err != nil {
 		return nil, err
 	}
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
 
 	session := &Session{
 		connection: conn,
@@ -121,7 +125,13 @@ func NewSession(peer PeerInfo, identity *ClientIdentity) (*Session, error) {
 		sessionID:  uuid.NewV7(),
 	}
 
-	if err := session.EstablishKeyExchange(identity); err != nil {
+	err = session.EstablishKeyExchange(identity)
+	if !stop() {
+		// ctx was cancelled and the connection closed, whether or not the handshake finished.
+		session.Close()
+		return nil, context.Cause(ctx)
+	}
+	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to establish key exchange: %w", err)
 	}

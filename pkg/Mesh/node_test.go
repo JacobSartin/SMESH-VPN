@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/JacobSartin/SMESH-VPN/internal/testpki"
 	certs "github.com/JacobSartin/SMESH-VPN/pkg/Certs"
@@ -247,5 +248,101 @@ func TestRunStopsCleanlyOnCancel(t *testing.T) {
 
 	if err := alice.stop(); err != nil {
 		t.Fatalf("Run returned %v after cancel", err)
+	}
+}
+
+// staticPeers is a PeerSource with a fixed peer list.
+type staticPeers []discovery.PeerRecord
+
+func (p staticPeers) ListPeers(context.Context) ([]discovery.PeerRecord, error) { return p, nil }
+
+// silentListener accepts connections and never responds, so handshakes with it
+// hang. A value is sent on the returned channel when the dialer closes a connection.
+func silentListener(t *testing.T) (net.Listener, <-chan struct{}) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	closed := make(chan struct{}, 4)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				_, _ = io.Copy(io.Discard, conn)
+				conn.Close()
+				closed <- struct{}{}
+			}()
+		}
+	}()
+	return listener, closed
+}
+
+func TestRunAbortsInFlightHandshakesOnCancel(t *testing.T) {
+	identity := testpki.NewIdentity(t, testpki.NewCA(t))
+	silent, silentClosed := silentListener(t)
+
+	// A peer with the highest possible ID, so this node is the one that dials it.
+	var highest uuid.UUID
+	for i := range highest {
+		highest[i] = 0xff
+	}
+	peers := staticPeers{{
+		ID:      highest,
+		Address: silent.Addr().(*net.TCPAddr).AddrPort(),
+		VPNIP:   netip.MustParseAddr("10.77.0.9"),
+	}}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := session.NewSessionManager(time.Hour, time.Hour, time.Hour, identity)
+	t.Cleanup(manager.Shutdown)
+	node, err := New(Config{Sessions: manager, Peers: peers, Listener: listener, Device: newFakeDevice(), Logf: t.Logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- node.Run(ctx) }()
+
+	// An inbound connection that never sends a hello.
+	inbound, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inbound.Close()
+
+	time.Sleep(200 * time.Millisecond) // let the outbound dial and inbound handshake start
+	cancel()
+
+	// Both handshakes would otherwise wait for the 10s handshake timeout.
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run returned %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return promptly with handshakes in flight")
+	}
+	// Run must not return while a handshake is still in progress: both stuck
+	// connections have to be closed already.
+	select {
+	case <-silentClosed:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("outbound handshake was still running after Run returned")
+	}
+	_ = inbound.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	if _, err := inbound.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("inbound handshake was still running after Run returned (read: %v)", err)
+	}
+	if n := manager.Count(); n != 0 {
+		t.Fatalf("%d sessions left after Run returned", n)
 	}
 }

@@ -117,7 +117,12 @@ func runIssueClient(args []string, out io.Writer) error {
 	}
 	der, err := ca.IssueClientCertificate(key.PublicKey(), id.String())
 	if err != nil {
-		return err
+		return fmt.Errorf("issue-client: client %s: %w", id, err)
+	}
+	// Record the certificate before handing out the key, so a second run with
+	// the same ID is refused even if this one stops partway.
+	if err := certs.RecordIssuedCertificate(*caDir, der); err != nil {
+		return fmt.Errorf("issue-client: %w", err)
 	}
 
 	if err := os.MkdirAll(*outDir, 0o700); err != nil {

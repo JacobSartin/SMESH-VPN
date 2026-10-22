@@ -3,6 +3,7 @@ package certs
 import (
 	"crypto/mldsa"
 	"crypto/x509"
+	"errors"
 	"path/filepath"
 	"testing"
 	"uuid"
@@ -98,5 +99,59 @@ func TestIssuedSerialNumbersAreUniqueAcrossLoads(t *testing.T) {
 			t.Fatalf("serial %s issued twice", serial)
 		}
 		seen[serial] = true
+	}
+}
+
+func TestIssuedRecordsPreventDuplicateClientIDsAcrossLoads(t *testing.T) {
+	dir := t.TempDir()
+	ca, _ := NewCertificateAuthority()
+	if err := ca.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New().String()
+
+	first, err := LoadCertificateAuthority(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := mldsa.GenerateKey(mldsa.MLDSA44())
+	der, err := first.IssueClientCertificate(key.PublicKey(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordIssuedCertificate(dir, der); err != nil {
+		t.Fatalf("record issued certificate: %v", err)
+	}
+	if err := RecordIssuedCertificate(dir, der); !errors.Is(err, ErrCertificateAlreadyExists) {
+		t.Fatalf("recording the same client twice: expected ErrCertificateAlreadyExists, got %v", err)
+	}
+
+	second, err := LoadCertificateAuthority(dir)
+	if err != nil {
+		t.Fatalf("reload CA with issued records: %v", err)
+	}
+	otherKey, _ := mldsa.GenerateKey(mldsa.MLDSA44())
+	if _, err := second.IssueClientCertificate(otherKey.PublicKey(), id); !errors.Is(err, ErrCertificateAlreadyExists) {
+		t.Fatalf("reissuing a recorded client ID: expected ErrCertificateAlreadyExists, got %v", err)
+	}
+}
+
+func TestLoadCertificateAuthorityRejectsForeignIssuedRecord(t *testing.T) {
+	dir := t.TempDir()
+	ca, _ := NewCertificateAuthority()
+	if err := ca.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := NewCertificateAuthority()
+	key, _ := mldsa.GenerateKey(mldsa.MLDSA44())
+	der, err := other.IssueClientCertificate(key.PublicKey(), uuid.New().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordIssuedCertificate(dir, der); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCertificateAuthority(dir); err == nil {
+		t.Fatal("expected a record signed by another CA to be rejected")
 	}
 }

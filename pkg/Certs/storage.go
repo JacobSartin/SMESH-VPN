@@ -14,6 +14,9 @@ import (
 const (
 	CACertificateFile = "ca.crt"
 	CAPrivateKeyFile  = "ca.key"
+	// IssuedDirectory records every client certificate the CA has issued, so a
+	// client ID cannot be issued twice across separate runs.
+	IssuedDirectory = "issued"
 )
 
 const (
@@ -147,5 +150,60 @@ func LoadCertificateAuthority(dir string) (*CertificateAuthority, error) {
 
 	ca := newCertificateAuthority(key, cert.NotBefore, cert.NotAfter)
 	ca.Certificate = cert
+	if err := ca.loadIssued(filepath.Join(dir, IssuedDirectory)); err != nil {
+		return nil, err
+	}
 	return ca, nil
+}
+
+// loadIssued reads the issued-certificate records so duplicate client IDs are rejected.
+func (ca *CertificateAuthority) loadIssued(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".crt" {
+			continue
+		}
+		issued, err := LoadCertificateFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return err
+		}
+		if err := issued.CheckSignatureFrom(ca.Certificate); err != nil {
+			return fmt.Errorf("%s was not issued by this CA: %w", entry.Name(), err)
+		}
+		id, err := ClientIDFromCertificate(issued)
+		if err != nil {
+			return fmt.Errorf("%s: %w", entry.Name(), err)
+		}
+		ca.Certificates[id.String()] = issued
+	}
+	return nil
+}
+
+// RecordIssuedCertificate stores a client certificate in the issued records of
+// the CA in dir. It fails with ErrCertificateAlreadyExists if that client ID
+// was already recorded, which also guards against concurrent issue runs.
+func RecordIssuedCertificate(dir string, der []byte) error {
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return err
+	}
+	id, err := ClientIDFromCertificate(cert)
+	if err != nil {
+		return err
+	}
+	issuedDir := filepath.Join(dir, IssuedDirectory)
+	if err := os.MkdirAll(issuedDir, 0o700); err != nil {
+		return err
+	}
+	err = WriteCertificateFile(filepath.Join(issuedDir, id.String()+".crt"), der)
+	if errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("client %s: %w", id, ErrCertificateAlreadyExists)
+	}
+	return err
 }

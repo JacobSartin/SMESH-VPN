@@ -143,7 +143,9 @@ func run(ctx context.Context, cfg config) error {
 		device.Close()
 		return err
 	}
-	record, err := discoveryClient.Register(ctx, endpoint, vpnIP)
+	record, err := registerWithRetry(ctx, func(ctx context.Context) (discovery.PeerRecord, error) {
+		return discoveryClient.Register(ctx, endpoint, vpnIP)
+	}, time.Second, 10*time.Second, log.Printf)
 	if err != nil {
 		listener.Close()
 		device.Close()
@@ -183,4 +185,33 @@ func run(ctx context.Context, cfg config) error {
 	}
 	log.Print("Stopped")
 	return runErr
+}
+
+// registerWithRetry performs the initial registration. The discovery server
+// may not be reachable yet (it may still be starting), so transport errors and
+// server errors are retried with backoff until ctx is done. Client errors such
+// as a rejected certificate or an overlay IP conflict are returned at once.
+func registerWithRetry(ctx context.Context, register func(context.Context) (discovery.PeerRecord, error), minDelay, maxDelay time.Duration, logf func(string, ...any)) (discovery.PeerRecord, error) {
+	delay := minDelay
+	for {
+		record, err := register(ctx)
+		if err == nil {
+			return record, nil
+		}
+		var statusErr *discovery.StatusError
+		if errors.As(err, &statusErr) && statusErr.StatusCode < 500 {
+			return discovery.PeerRecord{}, err
+		}
+		if ctx.Err() != nil {
+			return discovery.PeerRecord{}, err
+		}
+
+		logf("Registration failed, retrying in %s: %v", delay, err)
+		select {
+		case <-ctx.Done():
+			return discovery.PeerRecord{}, err
+		case <-time.After(delay):
+		}
+		delay = min(2*delay, maxDelay)
+	}
 }

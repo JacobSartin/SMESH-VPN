@@ -2,7 +2,9 @@ package session_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -52,7 +54,7 @@ func TestAuthenticatedSessionBindsCertificateIdentities(t *testing.T) {
 	aliceManager := session.NewSessionManager(time.Hour, time.Hour, time.Hour, alice)
 	t.Cleanup(aliceManager.Shutdown)
 
-	aliceSide, err := aliceManager.CreateSession(session.PeerInfo{ID: bob.ID, Address: bobAddr})
+	aliceSide, err := aliceManager.CreateSession(context.Background(), session.PeerInfo{ID: bob.ID, Address: bobAddr})
 	if err != nil {
 		t.Fatalf("dial bob: %v", err)
 	}
@@ -91,7 +93,7 @@ func TestAuthenticatedSessionRejectsUnexpectedPeer(t *testing.T) {
 	bob := testpki.NewIdentity(t, ca)
 	_, bobAddr, _ := listen(t, bob)
 
-	_, err := session.NewSession(session.PeerInfo{ID: uuid.NewV7(), Address: bobAddr}, alice)
+	_, err := session.NewSession(context.Background(), session.PeerInfo{ID: uuid.NewV7(), Address: bobAddr}, alice)
 	if !errors.Is(err, session.ErrUnexpectedPeer) {
 		t.Fatalf("expected ErrUnexpectedPeer, got %v", err)
 	}
@@ -102,7 +104,7 @@ func TestAuthenticatedSessionRejectsPeerFromOtherCA(t *testing.T) {
 	mallory := testpki.NewIdentity(t, testpki.NewCA(t))
 	_, malloryAddr, _ := listen(t, mallory)
 
-	if _, err := session.NewSession(session.PeerInfo{ID: mallory.ID, Address: malloryAddr}, alice); err == nil {
+	if _, err := session.NewSession(context.Background(), session.PeerInfo{ID: mallory.ID, Address: malloryAddr}, alice); err == nil {
 		t.Fatal("expected a peer from another CA to be rejected")
 	}
 }
@@ -112,7 +114,7 @@ func TestHandshakeModeMismatchIsReported(t *testing.T) {
 	alice := testpki.NewIdentity(t, ca)
 	_, addr, events := listen(t, nil) // unauthenticated listener
 
-	_, _ = session.NewSession(session.PeerInfo{ID: uuid.NewV7(), Address: addr}, alice)
+	_, _ = session.NewSession(context.Background(), session.PeerInfo{ID: uuid.NewV7(), Address: addr}, alice)
 
 	event := waitEvent(t, events, session.SessionEventError)
 	if !errors.Is(event.Error, session.ErrHandshakeMismatch) {
@@ -140,5 +142,41 @@ func TestSilentPeerTimesOutDuringHandshake(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("handshake with a silent peer did not time out")
+	}
+}
+
+func TestNewSessionAbortsHandshakeOnCancel(t *testing.T) {
+	identity := testpki.NewIdentity(t, testpki.NewCA(t))
+
+	// A peer that accepts the TCP connection but never answers the hello.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			defer conn.Close()
+			_, _ = io.Copy(io.Discard, conn)
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := session.NewSession(ctx, session.PeerInfo{ID: uuid.NewV7(), Address: listener.Addr()}, identity)
+		done <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handshake did not abort after cancel")
 	}
 }

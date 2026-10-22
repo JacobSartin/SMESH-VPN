@@ -25,6 +25,8 @@ x-client: &client
   depends_on:
     pki: { condition: service_completed_successfully }
     router: { condition: service_started }
+    # Clients retry their initial registration, so discovery only needs to be
+    # started, not ready.
     discovery: { condition: service_started }
 
 x-client-env: &client-env

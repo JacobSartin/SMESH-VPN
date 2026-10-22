@@ -58,6 +58,10 @@ type Node struct {
 	routes  map[netip.Addr]uuid.UUID
 	dialing map[uuid.UUID]bool
 	backoff map[uuid.UUID]dialBackoff
+
+	// workers tracks the dial, handshake, and session reader goroutines so Run
+	// can wait for them. They are only started by Run's loops.
+	workers sync.WaitGroup
 }
 
 type dialBackoff struct {
@@ -129,6 +133,10 @@ func (n *Node) Run(ctx context.Context) error {
 	n.cfg.Device.Close()
 	n.cfg.Sessions.CloseAll()
 	wg.Wait()
+	// The loops have stopped, so no new workers can start. In-flight handshakes
+	// were aborted by ctx; wait for them and for the session readers.
+	n.workers.Wait()
+	n.cfg.Sessions.CloseAll()
 
 	select {
 	case err := <-errCh:
@@ -152,10 +160,18 @@ func (n *Node) acceptLoop(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("accept: %w", err)
 		}
-		go func() {
+		n.workers.Go(func() {
+			// Closing the connection on cancel aborts a handshake in progress.
+			stop := context.AfterFunc(ctx, func() { conn.Close() })
 			s, err := n.cfg.Sessions.CreateSessionFromConnection(conn)
+			stop()
 			if err != nil {
-				n.cfg.Logf("mesh: inbound handshake from %s failed: %v", conn.RemoteAddr(), err)
+				if ctx.Err() == nil {
+					n.cfg.Logf("mesh: inbound handshake from %s failed: %v", conn.RemoteAddr(), err)
+				}
+				return
+			}
+			if n.discardIfStopped(ctx, s) {
 				return
 			}
 			n.cfg.Logf("mesh: session with %s established (inbound from %s)", s.PeerID(), conn.RemoteAddr())
@@ -163,8 +179,18 @@ func (n *Node) acceptLoop(ctx context.Context) error {
 				n.requestRefresh()
 			}
 			n.readSession(ctx, s)
-		}()
+		})
 	}
+}
+
+// discardIfStopped closes s if the node has stopped. Run cancels ctx before it
+// closes all sessions, so a session added after that is caught here.
+func (n *Node) discardIfStopped(ctx context.Context, s *session.Session) bool {
+	if ctx.Err() == nil {
+		return false
+	}
+	n.cfg.Sessions.RemoveSession(s.SessionID())
+	return true
 }
 
 func (n *Node) pollLoop(ctx context.Context) error {
@@ -238,8 +264,8 @@ func (n *Node) maybeDial(ctx context.Context, record discovery.PeerRecord) {
 	n.dialing[record.ID] = true
 	n.mu.Unlock()
 
-	go func() {
-		s, err := n.cfg.Sessions.CreateSession(session.PeerInfo{
+	n.workers.Go(func() {
+		s, err := n.cfg.Sessions.CreateSession(ctx, session.PeerInfo{
 			ID:      record.ID,
 			Address: net.TCPAddrFromAddrPort(record.Address),
 		})
@@ -262,9 +288,12 @@ func (n *Node) maybeDial(ctx context.Context, record discovery.PeerRecord) {
 			}
 			return
 		}
+		if n.discardIfStopped(ctx, s) {
+			return
+		}
 		n.cfg.Logf("mesh: session with %s established (dialed %s)", record.ID, record.Address)
 		n.readSession(ctx, s)
-	}()
+	})
 }
 
 // readSession writes packets from s to the device until the session ends.

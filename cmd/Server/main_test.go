@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 	"uuid"
@@ -40,5 +42,25 @@ func TestInitCAThenIssueClientProducesLoadableIdentity(t *testing.T) {
 	}
 	if err := runIssueClient([]string{"-ca-dir", caDir, "-out", clientDir}, io.Discard); err == nil {
 		t.Fatal("expected issue-client to refuse to overwrite existing client files")
+	}
+}
+
+func TestIssueClientRefusesDuplicateIDAcrossRuns(t *testing.T) {
+	root := t.TempDir()
+	caDir := filepath.Join(root, "ca")
+	id := uuid.NewV7().String()
+
+	if err := runInitCA([]string{"-dir", caDir}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := runIssueClient([]string{"-ca-dir", caDir, "-out", filepath.Join(root, "first"), "-id", id}, io.Discard); err != nil {
+		t.Fatalf("first issue: %v", err)
+	}
+	err := runIssueClient([]string{"-ca-dir", caDir, "-out", filepath.Join(root, "second"), "-id", id}, io.Discard)
+	if !errors.Is(err, certs.ErrCertificateAlreadyExists) {
+		t.Fatalf("expected ErrCertificateAlreadyExists for a reused ID, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "second", clientPrivateKeyFile)); !os.IsNotExist(statErr) {
+		t.Fatal("a key was written for the refused duplicate ID")
 	}
 }
