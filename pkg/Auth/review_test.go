@@ -61,12 +61,16 @@ func TestHelloIDMustMatchCertificateIdentity(t *testing.T) {
 	serverPeer := issueReviewPeer(t, ca)
 
 	// Attacker signs a hello with their own certificate but claims victim's ID.
-	client, err := NewAuthenticatedPQXDHClient(attacker.cert, attacker.key, verifier, victim.id)
+	client, err := NewAuthenticatedPQXDHClient(attacker.cert, attacker.key, verifier)
 	if err != nil {
 		t.Fatal(err)
 	}
 	hello, err := client.CreateClientHello()
 	if err != nil {
+		t.Fatal(err)
+	}
+	hello.ID = victim.id
+	if err := hello.Sign(attacker.key); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,7 +95,7 @@ func TestResponseIsBoundToTheHelloItAnswers(t *testing.T) {
 	bob := issueReviewPeer(t, ca)
 	mallory := issueReviewPeer(t, ca)
 
-	aliceClient, err := NewAuthenticatedPQXDHClient(alice.cert, alice.key, verifier, alice.id)
+	aliceClient, err := NewAuthenticatedPQXDHClient(alice.cert, alice.key, verifier)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +126,7 @@ func TestResponseIsBoundToTheHelloItAnswers(t *testing.T) {
 	}
 
 	// Mallory forwards Bob's response to Alice unchanged.
-	aliceKey, err := aliceClient.ProcessServerResponse(response)
+	aliceKey, _, err := aliceClient.ProcessServerResponse(response)
 	if err == nil && bytes.Equal(aliceKey, bobKey) {
 		t.Fatalf("identity misbinding: alice and bob share a key, but bob attributes the session to mallory (%s)", mallory.id)
 	}
@@ -148,12 +152,19 @@ func TestPeerVerifierRejectsNonClientCertificates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	client, err := NewAuthenticatedPQXDHClient(tlsCert, tlsKey, verifier, uuid.NewV7())
+	// The client constructor already refuses a certificate without a client
+	// identity, so build the hello by hand to exercise the server's check.
+	keySource, err := NewAuthenticatedPQXDHClient(serverPeer.cert, serverPeer.key, verifier)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hello, err := client.CreateClientHello()
+	hello, err := keySource.CreateClientHello()
 	if err != nil {
+		t.Fatal(err)
+	}
+	hello.Certificate = tlsCert.Raw
+	hello.ID = uuid.NewV7()
+	if err := hello.Sign(tlsKey); err != nil {
 		t.Fatal(err)
 	}
 	server, err := NewAuthenticatedPQXDHServer(serverPeer.cert, serverPeer.key, verifier)
