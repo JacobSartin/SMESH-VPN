@@ -57,18 +57,18 @@ func TestAdvertisedEndpoint(t *testing.T) {
 }
 
 func TestRegisterWithRetry(t *testing.T) {
-	ok := discovery.PeerRecord{VPNIP: netip.MustParseAddr("10.77.0.2")}
+	ok := discovery.Registration{PeerRecord: discovery.PeerRecord{VPNIP: netip.MustParseAddr("10.77.0.2")}, TTLMillis: 120000}
 	noLog := func(string, ...any) {}
 
 	t.Run("retries until the server is reachable", func(t *testing.T) {
 		calls := 0
-		record, err := registerWithRetry(context.Background(), func(context.Context) (discovery.PeerRecord, error) {
+		record, err := registerWithRetry(context.Background(), func(context.Context) (discovery.Registration, error) {
 			calls++
 			switch calls {
 			case 1:
-				return discovery.PeerRecord{}, errors.New("connection refused")
+				return discovery.Registration{}, errors.New("connection refused")
 			case 2:
-				return discovery.PeerRecord{}, &discovery.StatusError{StatusCode: http.StatusServiceUnavailable}
+				return discovery.Registration{}, &discovery.StatusError{StatusCode: http.StatusServiceUnavailable}
 			}
 			return ok, nil
 		}, time.Millisecond, time.Millisecond, noLog)
@@ -79,9 +79,9 @@ func TestRegisterWithRetry(t *testing.T) {
 
 	t.Run("client errors are not retried", func(t *testing.T) {
 		calls := 0
-		_, err := registerWithRetry(context.Background(), func(context.Context) (discovery.PeerRecord, error) {
+		_, err := registerWithRetry(context.Background(), func(context.Context) (discovery.Registration, error) {
 			calls++
-			return discovery.PeerRecord{}, &discovery.StatusError{StatusCode: http.StatusConflict}
+			return discovery.Registration{}, &discovery.StatusError{StatusCode: http.StatusConflict}
 		}, time.Millisecond, time.Millisecond, noLog)
 		if err == nil || calls != 1 {
 			t.Fatalf("expected one failed call, got %v after %d calls", err, calls)
@@ -91,8 +91,8 @@ func TestRegisterWithRetry(t *testing.T) {
 	t.Run("stops when cancelled", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
-		_, err := registerWithRetry(ctx, func(context.Context) (discovery.PeerRecord, error) {
-			return discovery.PeerRecord{}, errors.New("connection refused")
+		_, err := registerWithRetry(ctx, func(context.Context) (discovery.Registration, error) {
+			return discovery.Registration{}, errors.New("connection refused")
 		}, time.Millisecond, 5*time.Millisecond, noLog)
 		if err == nil {
 			t.Fatal("expected an error once the context is done")

@@ -32,6 +32,10 @@ const (
 // handshakeTimeout bounds dialing and the whole key exchange. Tests shorten it.
 var handshakeTimeout = 10 * time.Second
 
+// writeTimeout bounds how long writing one frame may block. A peer that stops
+// reading would otherwise block its writers indefinitely. Tests shorten it.
+var writeTimeout = 10 * time.Second
+
 // The first handshake frame starts with a protocol version and a mode byte so
 // that peers configured differently fail with a clear error.
 const (
@@ -330,8 +334,13 @@ func (s *Session) sendFrame(frame []byte) error {
 	}
 
 	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if err := network.SendWithLen(conn, encrypted); err != nil {
+	_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	err = network.SendWithLen(conn, encrypted)
+	s.writeMu.Unlock()
+	if err != nil {
+		// A frame may have been partly written, so the stream is no longer
+		// usable. Closing also unblocks the reader so the owner notices.
+		_ = s.Close()
 		return fmt.Errorf("failed to write to connection: %w", err)
 	}
 	return nil

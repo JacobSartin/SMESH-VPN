@@ -45,6 +45,19 @@ type RegistrationRequest struct {
 	VPNIP   netip.Addr     `json:"vpn_ip"`
 }
 
+// Registration is the response to POST /peers: the stored record and how long
+// it lives without a refresh. Clients should refresh well before TTL elapses.
+type Registration struct {
+	PeerRecord
+	// TTLMillis is the registration lifetime in milliseconds; 0 means it never expires.
+	TTLMillis int64 `json:"ttl_ms"`
+}
+
+// TTL returns the registration lifetime; 0 means it never expires.
+func (r Registration) TTL() time.Duration {
+	return time.Duration(r.TTLMillis) * time.Millisecond
+}
+
 type peerIDContextKey struct{}
 
 // Server coordinates peers by keeping a small in-memory registry.
@@ -257,7 +270,7 @@ func (ds *Server) handleRegisterPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, record)
+	writeJSON(w, http.StatusOK, Registration{PeerRecord: record, TTLMillis: ds.ttl.Milliseconds()})
 }
 
 func (ds *Server) handlePeerByID(w http.ResponseWriter, r *http.Request) {

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -345,4 +346,83 @@ func TestRunAbortsInFlightHandshakesOnCancel(t *testing.T) {
 	if n := manager.Count(); n != 0 {
 		t.Fatalf("%d sessions left after Run returned", n)
 	}
+}
+
+// runNode starts a node for identity with a fixed peer list and returns its
+// fake device and listener address.
+func runNode(t *testing.T, identity *session.ClientIdentity, peers PeerSource, listener net.Listener) *fakeDevice {
+	t.Helper()
+	manager := session.NewSessionManager(time.Hour, time.Hour, time.Hour, identity)
+	t.Cleanup(manager.Shutdown)
+	device := newFakeDevice()
+	node, err := New(Config{
+		Sessions: manager, Peers: peers, Listener: listener, Device: device,
+		PollInterval: 50 * time.Millisecond, KeepaliveInterval: 50 * time.Millisecond,
+		MinBackoff: 20 * time.Millisecond, MaxBackoff: 100 * time.Millisecond, Logf: t.Logf,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = node.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	return device
+}
+
+// A peer that completes the handshake and then stops reading must not stall
+// traffic to other peers.
+func TestStalledPeerDoesNotBlockOtherPeers(t *testing.T) {
+	ca := testpki.NewCA(t)
+	// Node A dials peers with higher IDs, so make A the lowest.
+	ids := []*session.ClientIdentity{testpki.NewIdentity(t, ca), testpki.NewIdentity(t, ca), testpki.NewIdentity(t, ca)}
+	slices.SortFunc(ids, func(x, y *session.ClientIdentity) int { return bytes.Compare(x.ID[:], y.ID[:]) })
+	a, b, c := ids[0], ids[1], ids[2]
+	aIP, bIP, cIP := netip.MustParseAddr("10.77.0.1"), netip.MustParseAddr("10.77.0.2"), netip.MustParseAddr("10.77.0.3")
+
+	listen := func() net.Listener {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	aListener, bListener, cListener := listen(), listen(), listen()
+	endpoint := func(l net.Listener) netip.AddrPort { return l.Addr().(*net.TCPAddr).AddrPort() }
+
+	// C accepts sessions but never reads from them.
+	stalled := session.NewSessionManager(time.Hour, time.Hour, time.Hour, c)
+	t.Cleanup(stalled.Shutdown)
+	t.Cleanup(func() { cListener.Close() })
+	go stalled.ListenForNewConnections(cListener)
+
+	bDevice := runNode(t, b, staticPeers{{ID: a.ID, Address: endpoint(aListener), VPNIP: aIP}}, bListener)
+	aDevice := runNode(t, a, staticPeers{
+		{ID: b.ID, Address: endpoint(bListener), VPNIP: bIP},
+		{ID: c.ID, Address: endpoint(cListener), VPNIP: cIP},
+	}, aListener)
+
+	// Make sure A reaches B and holds a session with C before flooding C;
+	// otherwise packets to C would just be dropped for lack of a session.
+	sendUntilDelivered(t, &testPeer{device: aDevice}, &testPeer{device: bDevice}, ipv4Packet(aIP, bIP, []byte("warmup")))
+	deadline := time.Now().Add(5 * time.Second)
+	for stalled.Count() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("A never established a session with the stalled peer")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Flood C with far more than TCP will buffer. Injection must keep flowing:
+	// if A's device loop blocks on C, the fake device's inject channel fills.
+	flood := ipv4Packet(aIP, cIP, make([]byte, 1300))
+	for i := range 20000 {
+		select {
+		case aDevice.inject <- flood:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("device loop stopped reading after %d packets to the stalled peer", i)
+		}
+	}
+
+	sendUntilDelivered(t, &testPeer{device: aDevice}, &testPeer{device: bDevice}, ipv4Packet(aIP, bIP, []byte("still flowing")))
 }

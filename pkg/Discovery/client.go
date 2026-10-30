@@ -54,14 +54,14 @@ func NewClient(baseURL string, identity *session.ClientIdentity) (*Client, error
 
 // Register registers or refreshes this peer. Pass an unspecified host in
 // address (for example 0.0.0.0:7777) to have the server use the source IP it sees.
-func (c *Client) Register(ctx context.Context, address netip.AddrPort, vpnIP netip.Addr) (PeerRecord, error) {
+func (c *Client) Register(ctx context.Context, address netip.AddrPort, vpnIP netip.Addr) (Registration, error) {
 	body, err := json.Marshal(RegistrationRequest{Address: address, VPNIP: vpnIP})
 	if err != nil {
-		return PeerRecord{}, err
+		return Registration{}, err
 	}
-	var record PeerRecord
-	err = c.do(ctx, http.MethodPost, "/peers", body, http.StatusOK, &record)
-	return record, err
+	var registration Registration
+	err = c.do(ctx, http.MethodPost, "/peers", body, http.StatusOK, &registration)
+	return registration, err
 }
 
 // ListPeers returns the live peers other than this one.
@@ -76,20 +76,37 @@ func (c *Client) Deregister(ctx context.Context) error {
 	return c.do(ctx, http.MethodDelete, "/peers", nil, http.StatusNoContent, nil)
 }
 
-// Heartbeat re-registers every interval until ctx is done. The first
-// registration happens immediately. onError, if set, is called for failed attempts.
-func (c *Client) Heartbeat(ctx context.Context, interval time.Duration, address netip.AddrPort, vpnIP netip.Addr, onError func(error)) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+// DefaultRefreshInterval is used when the server's registrations never expire.
+const DefaultRefreshInterval = 30 * time.Second
+
+// RefreshInterval returns how often to re-register for a server TTL: a third
+// of it, so two refreshes can fail before the registration expires.
+func RefreshInterval(ttl time.Duration) time.Duration {
+	if ttl <= 0 {
+		return DefaultRefreshInterval
+	}
+	return ttl / 3
+}
+
+// Heartbeat keeps the registration alive until ctx is done. last is the most
+// recent successful registration; the refresh interval follows the TTL the
+// server reports in each response. onError, if set, is called for failed attempts.
+func (c *Client) Heartbeat(ctx context.Context, last Registration, address netip.AddrPort, vpnIP netip.Addr, onError func(error)) {
+	interval := RefreshInterval(last.TTL())
 	for {
-		if _, err := c.Register(ctx, address, vpnIP); err != nil && onError != nil && ctx.Err() == nil {
-			onError(err)
-		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-time.After(interval):
 		}
+		registration, err := c.Register(ctx, address, vpnIP)
+		if err != nil {
+			if onError != nil && ctx.Err() == nil {
+				onError(err)
+			}
+			continue
+		}
+		interval = RefreshInterval(registration.TTL())
 	}
 }
 

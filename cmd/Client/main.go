@@ -25,7 +25,6 @@ import (
 )
 
 const (
-	heartbeatInterval = 30 * time.Second // the server's default TTL is 2m
 	keepaliveInterval = 10 * time.Second
 	maxSessionIdle    = 3 * keepaliveInterval
 	maxKeyAge         = time.Hour
@@ -143,7 +142,7 @@ func run(ctx context.Context, cfg config) error {
 		device.Close()
 		return err
 	}
-	record, err := registerWithRetry(ctx, func(ctx context.Context) (discovery.PeerRecord, error) {
+	registration, err := registerWithRetry(ctx, func(ctx context.Context) (discovery.Registration, error) {
 		return discoveryClient.Register(ctx, endpoint, vpnIP)
 	}, time.Second, 10*time.Second, log.Printf)
 	if err != nil {
@@ -151,7 +150,8 @@ func run(ctx context.Context, cfg config) error {
 		device.Close()
 		return fmt.Errorf("register with discovery server: %w", err)
 	}
-	log.Printf("Registered with discovery as %s (overlay %s)", record.Address, record.VPNIP)
+	log.Printf("Registered with discovery as %s (overlay %s); refreshing every %s",
+		registration.Address, registration.VPNIP, discovery.RefreshInterval(registration.TTL()))
 
 	sessions := session.NewSessionManager(time.Second*5, maxSessionIdle, maxKeyAge, identity)
 	defer sessions.Shutdown()
@@ -171,7 +171,7 @@ func run(ctx context.Context, cfg config) error {
 
 	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
 	defer stopHeartbeat()
-	go discoveryClient.Heartbeat(heartbeatCtx, heartbeatInterval, endpoint, vpnIP, func(err error) {
+	go discoveryClient.Heartbeat(heartbeatCtx, registration, endpoint, vpnIP, func(err error) {
 		log.Printf("Discovery heartbeat failed: %v", err)
 	})
 
@@ -191,25 +191,25 @@ func run(ctx context.Context, cfg config) error {
 // may not be reachable yet (it may still be starting), so transport errors and
 // server errors are retried with backoff until ctx is done. Client errors such
 // as a rejected certificate or an overlay IP conflict are returned at once.
-func registerWithRetry(ctx context.Context, register func(context.Context) (discovery.PeerRecord, error), minDelay, maxDelay time.Duration, logf func(string, ...any)) (discovery.PeerRecord, error) {
+func registerWithRetry(ctx context.Context, register func(context.Context) (discovery.Registration, error), minDelay, maxDelay time.Duration, logf func(string, ...any)) (discovery.Registration, error) {
 	delay := minDelay
 	for {
-		record, err := register(ctx)
+		registration, err := register(ctx)
 		if err == nil {
-			return record, nil
+			return registration, nil
 		}
 		var statusErr *discovery.StatusError
 		if errors.As(err, &statusErr) && statusErr.StatusCode < 500 {
-			return discovery.PeerRecord{}, err
+			return discovery.Registration{}, err
 		}
 		if ctx.Err() != nil {
-			return discovery.PeerRecord{}, err
+			return discovery.Registration{}, err
 		}
 
 		logf("Registration failed, retrying in %s: %v", delay, err)
 		select {
 		case <-ctx.Done():
-			return discovery.PeerRecord{}, err
+			return discovery.Registration{}, err
 		case <-time.After(delay):
 		}
 		delay = min(2*delay, maxDelay)

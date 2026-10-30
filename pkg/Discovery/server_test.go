@@ -252,37 +252,6 @@ func TestClientFromOtherCAIsRejected(t *testing.T) {
 	}
 }
 
-func TestHeartbeatRegistersUntilCancelled(t *testing.T) {
-	ca := testpki.NewCA(t)
-	ds := NewServer(ca, 2*time.Minute)
-	url := startTLSServer(t, ds)
-	peer := testpki.NewIdentity(t, ca)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		mustClient(t, url, peer).Heartbeat(ctx, 20*time.Millisecond, netip.MustParseAddrPort("0.0.0.0:7777"), netip.MustParseAddr("10.77.0.2"), func(err error) { t.Errorf("heartbeat: %v", err) })
-		close(done)
-	}()
-
-	deadline := time.After(5 * time.Second)
-	for {
-		if _, ok := ds.GetPeer(peer.ID); ok {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("heartbeat never registered the peer")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("heartbeat did not stop after cancel")
-	}
-}
 
 func mustRegister(t *testing.T, ds *Server, id uuid.UUID, address, vpnIP string) {
 	t.Helper()
@@ -352,4 +321,54 @@ func mustClient(t *testing.T, url string, identity *session.ClientIdentity) *Cli
 		t.Fatal(err)
 	}
 	return client
+}
+
+func TestRefreshInterval(t *testing.T) {
+	if got := RefreshInterval(0); got != DefaultRefreshInterval {
+		t.Errorf("no expiry: got %s, want %s", got, DefaultRefreshInterval)
+	}
+	if got := RefreshInterval(9 * time.Second); got != 3*time.Second {
+		t.Errorf("9s TTL: got %s, want 3s", got)
+	}
+}
+
+// The heartbeat must follow the server's TTL: with a TTL far below the default
+// refresh interval, a heartbeating peer must never drop out of the registry.
+func TestHeartbeatKeepsPeerRegisteredUnderShortTTL(t *testing.T) {
+	ca := testpki.NewCA(t)
+	const ttl = 300 * time.Millisecond
+	ds := NewServer(ca, ttl)
+	url := startTLSServer(t, ds)
+	peer := testpki.NewIdentity(t, ca)
+	client := mustClient(t, url, peer)
+	address, vpnIP := netip.MustParseAddrPort("0.0.0.0:7777"), netip.MustParseAddr("10.77.0.2")
+
+	registration, err := client.Register(context.Background(), address, vpnIP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registration.TTL() != ttl {
+		t.Fatalf("registration reports TTL %s, want %s", registration.TTL(), ttl)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		client.Heartbeat(ctx, registration, address, vpnIP, func(err error) { t.Errorf("heartbeat: %v", err) })
+		close(done)
+	}()
+
+	// Watch for several TTLs; the peer must stay registered throughout.
+	for end := time.Now().Add(4 * ttl); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		if _, ok := ds.GetPeer(peer.ID); !ok {
+			t.Fatal("peer expired while its heartbeat was running")
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("heartbeat did not stop after cancel")
+	}
 }

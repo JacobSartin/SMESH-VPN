@@ -37,7 +37,7 @@ type Config struct {
 
 	// PollInterval is how often Peers is polled. Default 5s.
 	PollInterval time.Duration
-	// KeepaliveInterval is how often idle sessions send a keepalive. Default 10s.
+	// KeepaliveInterval is how often each session sends a keepalive. Default 10s.
 	KeepaliveInterval time.Duration
 	// MinBackoff and MaxBackoff bound the delay between failed dials to a peer. Defaults 1s and 30s.
 	MinBackoff time.Duration
@@ -58,8 +58,10 @@ type Node struct {
 	routes  map[netip.Addr]uuid.UUID
 	dialing map[uuid.UUID]bool
 	backoff map[uuid.UUID]dialBackoff
+	// queues holds each live session's outbound packet queue, by session ID.
+	queues map[uuid.UUID]chan []byte
 
-	// workers tracks the dial, handshake, and session reader goroutines so Run
+	// workers tracks the dial, handshake, and session goroutines so Run
 	// can wait for them. They are only started by Run's loops.
 	workers sync.WaitGroup
 }
@@ -102,6 +104,7 @@ func New(cfg Config) (*Node, error) {
 		routes:  make(map[netip.Addr]uuid.UUID),
 		dialing: make(map[uuid.UUID]bool),
 		backoff: make(map[uuid.UUID]dialBackoff),
+		queues:  make(map[uuid.UUID]chan []byte),
 	}, nil
 }
 
@@ -111,7 +114,7 @@ func (n *Node) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	errCh := make(chan error, 4)
+	errCh := make(chan error, 3)
 	var wg sync.WaitGroup
 	start := func(fn func(context.Context) error) {
 		wg.Go(func() {
@@ -124,7 +127,6 @@ func (n *Node) Run(ctx context.Context) error {
 	start(n.acceptLoop)
 	start(n.deviceLoop)
 	start(n.pollLoop)
-	start(n.keepaliveLoop)
 
 	<-ctx.Done()
 	n.cfg.Listener.Close()
@@ -176,7 +178,7 @@ func (n *Node) acceptLoop(ctx context.Context) error {
 			if !n.knownPeer(s.PeerID()) {
 				n.requestRefresh()
 			}
-			n.readSession(ctx, s)
+			n.serveSession(ctx, s)
 		})
 	}
 }
@@ -290,7 +292,7 @@ func (n *Node) maybeDial(ctx context.Context, record discovery.PeerRecord) {
 			return
 		}
 		n.cfg.Logf("mesh: session with %s established (dialed %s)", record.ID, record.Address)
-		n.readSession(ctx, s)
+		n.serveSession(ctx, s)
 	})
 }
 
@@ -320,7 +322,54 @@ func (n *Node) readSession(ctx context.Context, s *session.Session) {
 	}
 }
 
-// deviceLoop sends packets read from the device to the peer that owns the destination.
+// sendQueueLength bounds the packets waiting for one peer. A peer that falls
+// behind loses packets instead of delaying traffic to every other peer.
+const sendQueueLength = 256
+
+// serveSession runs s until it ends: a sender that owns all writes to the peer,
+// and a reader that delivers the peer's packets to the device.
+func (n *Node) serveSession(ctx context.Context, s *session.Session) {
+	queue := make(chan []byte, sendQueueLength)
+	n.mu.Lock()
+	n.queues[s.SessionID()] = queue
+	n.mu.Unlock()
+
+	stop := make(chan struct{})
+	n.workers.Go(func() { n.sendSession(s, queue, stop) })
+	n.readSession(ctx, s)
+	close(stop)
+
+	n.mu.Lock()
+	delete(n.queues, s.SessionID())
+	n.mu.Unlock()
+}
+
+// sendSession writes queued packets and periodic keepalives to s. Each session
+// has its own sender, so a peer that stops reading only stalls itself; the
+// session's write timeout then closes it and the peer reconnects.
+func (n *Node) sendSession(s *session.Session, queue <-chan []byte, stop <-chan struct{}) {
+	ticker := time.NewTicker(n.cfg.KeepaliveInterval)
+	defer ticker.Stop()
+	for {
+		var err error
+		select {
+		case <-stop:
+			return
+		case packet := <-queue:
+			err = s.Send(packet)
+		case <-ticker.C:
+			err = s.SendKeepalive()
+		}
+		if err != nil {
+			// A failed write closes the session; removing it ends the reader too.
+			n.cfg.Sessions.RemoveSession(s.SessionID())
+			return
+		}
+	}
+}
+
+// deviceLoop queues packets read from the device for the peer that owns the
+// destination. It never blocks on a peer.
 func (n *Node) deviceLoop(ctx context.Context) error {
 	buf := make([]byte, 1<<16)
 	for {
@@ -341,24 +390,23 @@ func (n *Node) deviceLoop(ctx context.Context) error {
 		if !ok {
 			continue
 		}
-		// A failed send means the session is dying; its reader removes it.
-		_ = s.Send(packet)
+		queue, ok := n.sendQueue(s.SessionID())
+		if !ok {
+			continue
+		}
+		select {
+		case queue <- bytes.Clone(packet):
+		default:
+			// The peer is not keeping up; drop, as a congested link would.
+		}
 	}
 }
 
-func (n *Node) keepaliveLoop(ctx context.Context) error {
-	ticker := time.NewTicker(n.cfg.KeepaliveInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			for _, s := range n.cfg.Sessions.Sessions() {
-				_ = s.SendKeepalive()
-			}
-		}
-	}
+func (n *Node) sendQueue(sessionID uuid.UUID) (chan []byte, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	queue, ok := n.queues[sessionID]
+	return queue, ok
 }
 
 func (n *Node) knownPeer(id uuid.UUID) bool {
