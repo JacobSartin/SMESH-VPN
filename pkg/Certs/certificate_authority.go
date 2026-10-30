@@ -118,7 +118,7 @@ func newCertificateAuthority(priv *mldsa.PrivateKey, createdAt, expiresAt time.T
 // randomSerialNumber returns a random 128-bit serial. Serials must stay unique
 // across separate runs against a CA loaded from disk, so a counter is not enough.
 func randomSerialNumber() (*big.Int, error) {
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	serial, err := rand.Int(rand.Reader, new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(2)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate serial number: %w", err)
 	}
