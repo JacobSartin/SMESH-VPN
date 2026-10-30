@@ -8,7 +8,6 @@ import (
 	"net"
 	"testing"
 	"time"
-	"uuid"
 
 	certs "github.com/JacobSartin/SMESH-VPN/pkg/Certs"
 )
@@ -49,13 +48,13 @@ func TestHandshakeReturnsCertificateIdentities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantClientID, _ := certs.ClientIDFromCertificate(clientCert)
-	if hello.ID != wantClientID {
-		t.Fatalf("hello ID %s, want certificate ID %s", hello.ID, wantClientID)
-	}
-	response, _, err := server.ProcessClientHello(hello)
+	response, _, clientID, err := server.ProcessClientHello(hello)
 	if err != nil {
 		t.Fatal(err)
+	}
+	wantClientID, _ := certs.ClientIDFromCertificate(clientCert)
+	if clientID != wantClientID {
+		t.Fatalf("client ID %s, want certificate ID %s", clientID, wantClientID)
 	}
 	_, peerID, err := client.ProcessServerResponse(response)
 	if err != nil {
@@ -64,28 +63,6 @@ func TestHandshakeReturnsCertificateIdentities(t *testing.T) {
 	wantServerID, _ := certs.ClientIDFromCertificate(serverCert)
 	if peerID != wantServerID {
 		t.Fatalf("peer ID %s, want certificate ID %s", peerID, wantServerID)
-	}
-}
-
-func TestHandshakeRejectsHelloIDNotMatchingCertificate(t *testing.T) {
-	ca, verifier := newBindingFixture(t)
-	clientCert, clientKey, _ := createTestClientCertificate(ca)
-	serverCert, serverKey, _ := createTestServerCertificate(ca)
-	client, _ := NewAuthenticatedPQXDHClient(clientCert, clientKey, verifier)
-	server, _ := NewAuthenticatedPQXDHServer(serverCert, serverKey, verifier)
-
-	for _, claimed := range []uuid.UUID{uuid.New(), uuid.Nil()} {
-		hello, err := client.CreateClientHello()
-		if err != nil {
-			t.Fatal(err)
-		}
-		hello.ID = claimed
-		if err := hello.Sign(clientKey); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := server.ProcessClientHello(hello); !errors.Is(err, ErrIdentityMismatch) {
-			t.Fatalf("claimed ID %s: expected ErrIdentityMismatch, got %v", claimed, err)
-		}
 	}
 }
 
@@ -100,7 +77,7 @@ func TestHandshakeRejectsResponseForDifferentHello(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, _, err := server.ProcessClientHello(firstHello)
+	response, _, _, err := server.ProcessClientHello(firstHello)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +114,7 @@ func TestHandshakeRejectsDiscoveryServerCertificateAsPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, _, err := impostor.ProcessClientHello(hello)
+	response, _, _, err := impostor.ProcessClientHello(hello)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +145,7 @@ func TestHandshakeSignaturesSurviveJSONInAnyTimeZone(t *testing.T) {
 		var decodedHello AuthenticatedHandshakeHello
 		roundTrip(t, hello, &decodedHello)
 
-		response, _, err := server.ProcessClientHello(&decodedHello)
+		response, _, _, err := server.ProcessClientHello(&decodedHello)
 		if err != nil {
 			t.Fatalf("zone %q: hello rejected after JSON round trip: %v", zone, err)
 		}

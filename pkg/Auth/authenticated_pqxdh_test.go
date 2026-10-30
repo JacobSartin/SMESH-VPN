@@ -23,7 +23,7 @@ func EstablishAuthenticatedConnection(client *AuthenticatedPQXDHClient, server *
 	}
 
 	// Server processes hello and creates response
-	serverResponse, serverSharedKey, err := server.ProcessClientHello(clientHello)
+	serverResponse, serverSharedKey, _, err := server.ProcessClientHello(clientHello)
 	if err != nil {
 		return nil, nil, fmt.Errorf("server hello processing failed: %w", err)
 	}
@@ -340,7 +340,7 @@ func TestAuthenticatedHandshakeReplayProtection(t *testing.T) {
 	}
 
 	// Attempt to process the old message - should fail
-	_, _, err = server.ProcessClientHello(clientHello)
+	_, _, _, err = server.ProcessClientHello(clientHello)
 	if err == nil {
 		t.Fatalf("Expected handshake to fail with old timestamp, but it succeeded")
 	}
@@ -526,7 +526,7 @@ func TestInvalidSignatureWrongKey(t *testing.T) {
 	}
 
 	// Attempt to process the message with wrong signature - should fail
-	_, _, err = server.ProcessClientHello(clientHello)
+	_, _, _, err = server.ProcessClientHello(clientHello)
 	if err == nil {
 		t.Fatalf("Expected handshake to fail with wrong signature key, but it succeeded")
 	}
@@ -599,7 +599,7 @@ func TestValidSignatureTamperedMessage(t *testing.T) {
 	}
 
 	// Attempt to process the tampered message - should fail
-	_, _, err = server.ProcessClientHello(clientHello)
+	_, _, _, err = server.ProcessClientHello(clientHello)
 	if err == nil {
 		t.Fatalf("Expected handshake to fail with tampered message, but it succeeded")
 	}
@@ -619,7 +619,7 @@ func TestValidSignatureTamperedMessage(t *testing.T) {
 	}
 
 	// Attempt to process the tampered certificate message - should fail
-	_, _, err = server.ProcessClientHello(clientHello2)
+	_, _, _, err = server.ProcessClientHello(clientHello2)
 	if err == nil {
 		t.Fatalf("Expected handshake to fail with tampered certificate, but it succeeded")
 	}
@@ -676,7 +676,7 @@ func TestBinary(t *testing.T) {
 		t.Fatalf("Failed to unmarshal client hello: %v", err)
 	}
 
-	response, _, _ := server.ProcessClientHello(hello2)
+	response, _, _, _ := server.ProcessClientHello(hello2)
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
 		t.Fatalf("Failed to marshal server response: %v", err)

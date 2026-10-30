@@ -19,7 +19,6 @@ var (
 	ErrInvalidCertificate  = errors.New("invalid certificate")
 	ErrHandshakeTimeout    = errors.New("handshake timeout")
 	ErrInvalidSignature    = errors.New("invalid handshake signature")
-	ErrIdentityMismatch    = errors.New("handshake ID does not match certificate identity")
 	ErrHandshakeOutOfOrder = errors.New("server response processed before client hello was created")
 )
 
@@ -29,7 +28,6 @@ type AuthenticatedPQXDHClient struct {
 	certificate *x509.Certificate
 	privateKey  *mldsa.PrivateKey
 	verifier    *certs.ClientCertificateVerifier
-	id          uuid.UUID
 	helloHash   []byte
 }
 
@@ -42,10 +40,9 @@ type AuthenticatedPQXDHServer struct {
 }
 
 // NewAuthenticatedPQXDHClient creates a new authenticated PQXDH client.
-// The client ID is taken from cert, which must be a client certificate.
+// cert must be a client certificate carrying a client ID.
 func NewAuthenticatedPQXDHClient(cert *x509.Certificate, privKey *mldsa.PrivateKey, verifier *certs.ClientCertificateVerifier) (*AuthenticatedPQXDHClient, error) {
-	id, err := certs.ClientIDFromCertificate(cert)
-	if err != nil {
+	if _, err := certs.ClientIDFromCertificate(cert); err != nil {
 		return nil, err
 	}
 	pqxdhClient, err := pqxdh.NewPQXDHClient()
@@ -58,7 +55,6 @@ func NewAuthenticatedPQXDHClient(cert *x509.Certificate, privKey *mldsa.PrivateK
 		certificate: cert,
 		privateKey:  privKey,
 		verifier:    verifier,
-		id:          id,
 	}, nil
 }
 
@@ -85,7 +81,6 @@ func (ac *AuthenticatedPQXDHClient) CreateClientHello() (*AuthenticatedHandshake
 		ECPublicKey: ac.pqxdhClient.GetECPublicKey().Bytes(),
 		Certificate: ac.certificate.Raw,
 		Timestamp:   time.Now(),
-		ID:          ac.id,
 	}
 
 	if err := msg.Sign(ac.privateKey); err != nil {
@@ -97,34 +92,31 @@ func (ac *AuthenticatedPQXDHClient) CreateClientHello() (*AuthenticatedHandshake
 	return msg, nil
 }
 
-// ProcessClientHello processes an authenticated client hello and returns server response.
-// On success clientHello.ID is the verified identity of the peer.
-func (as *AuthenticatedPQXDHServer) ProcessClientHello(clientHello *AuthenticatedHandshakeHello) (response *AuthenticatedHandshakeResponse, key []byte, err error) {
-	peerID, err := verifiedPeerID(as.verifier, clientHello.Certificate)
+// ProcessClientHello processes an authenticated client hello and returns the
+// server response, the shared key, and the initiator's verified client ID.
+func (as *AuthenticatedPQXDHServer) ProcessClientHello(clientHello *AuthenticatedHandshakeHello) (response *AuthenticatedHandshakeResponse, key []byte, peerID uuid.UUID, err error) {
+	peerID, err = verifiedPeerID(as.verifier, clientHello.Certificate)
 	if err != nil {
-		return nil, nil, fmt.Errorf("client certificate verification failed: %w", err)
-	}
-	if peerID != clientHello.ID {
-		return nil, nil, ErrIdentityMismatch
+		return nil, nil, uuid.Nil(), fmt.Errorf("client certificate verification failed: %w", err)
 	}
 
 	if err := clientHello.Verify(); err != nil {
-		return nil, nil, err
+		return nil, nil, uuid.Nil(), err
 	}
 
 	clientPQPubKey, err := pqxdh.ParsePQPublicKey(clientHello.PQPublicKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse client PQ public key: %w", err)
+		return nil, nil, uuid.Nil(), fmt.Errorf("failed to parse client PQ public key: %w", err)
 	}
 
 	clientECPubKey, err := pqxdh.ParseECPublicKey(clientHello.ECPublicKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse client EC public key: %w", err)
+		return nil, nil, uuid.Nil(), fmt.Errorf("failed to parse client EC public key: %w", err)
 	}
 
 	sharedKey, ciphertext, err := pqxdh.ServerKeyExchange(clientPQPubKey, clientECPubKey, *as.pqxdhServer)
 	if err != nil {
-		return nil, nil, fmt.Errorf("PQXDH server key exchange failed: %w", err)
+		return nil, nil, uuid.Nil(), fmt.Errorf("PQXDH server key exchange failed: %w", err)
 	}
 
 	response = &AuthenticatedHandshakeResponse{
@@ -135,10 +127,10 @@ func (as *AuthenticatedPQXDHServer) ProcessClientHello(clientHello *Authenticate
 	}
 
 	if err := response.Sign(as.privateKey, clientHello.transcriptHash()); err != nil {
-		return nil, nil, fmt.Errorf("failed to sign server response: %w", err)
+		return nil, nil, uuid.Nil(), fmt.Errorf("failed to sign server response: %w", err)
 	}
 
-	return response, sharedKey, nil
+	return response, sharedKey, peerID, nil
 }
 
 // ProcessServerResponse processes the authenticated server response and derives

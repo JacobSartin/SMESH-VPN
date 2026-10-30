@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"slices"
 	"time"
-	"uuid"
 )
 
 // AuthenticatedHandshakeHello is the initiator's PQXDH hello, signed with the
@@ -23,13 +22,10 @@ type AuthenticatedHandshakeHello struct {
 
 	// Timestamp to prevent replay attacks
 	Timestamp time.Time `json:"timestamp"`
-
-	// ID is the initiator's client ID and must match its certificate.
-	ID uuid.UUID `json:"id"`
 }
 
 func (msg *AuthenticatedHandshakeHello) signatureData() []byte {
-	return slices.Concat(msg.PQPublicKey, msg.ECPublicKey, msg.Certificate, timestampBytes(msg.Timestamp), msg.ID[:])
+	return slices.Concat(msg.PQPublicKey, msg.ECPublicKey, msg.Certificate, timestampBytes(msg.Timestamp))
 }
 
 // transcriptHash identifies this hello so the response signature can be bound to it.

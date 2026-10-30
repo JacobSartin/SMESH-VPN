@@ -180,8 +180,8 @@ func newAuthenticatedSessionFromConn(conn net.Conn, identity *ClientIdentity) (*
 		return nil, fmt.Errorf("failed to create authenticated PQXDH server: %w", err)
 	}
 
-	// ProcessClientHello verifies the certificate and that hello.ID matches it.
-	response, key, err := exchange.ProcessClientHello(hello)
+	// ProcessClientHello verifies the certificate and returns the client ID it carries.
+	response, key, peerID, err := exchange.ProcessClientHello(hello)
 	if err != nil {
 		return nil, fmt.Errorf("failed to process client hello: %w", err)
 	}
@@ -211,7 +211,7 @@ func newAuthenticatedSessionFromConn(conn net.Conn, identity *ClientIdentity) (*
 	return &Session{
 		connection: conn,
 		peer: PeerInfo{
-			ID:          hello.ID,
+			ID:          peerID,
 			Address:     conn.RemoteAddr(),
 			Certificate: *peerCert,
 			LastSeen:    now,
