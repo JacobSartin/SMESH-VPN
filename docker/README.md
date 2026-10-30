@@ -70,3 +70,11 @@ To add a client in an override:
 - Extra arguments after `client` or `discovery` go to the binary, for example `command: [client, -advertise, 172.30.1.10:7777]`.
 - `ROUTES` (`"CIDR via GATEWAY"`, comma separated) is installed before the discovery server or client starts.
 - Any other command runs as given, for example `docker compose ... run --rm client-a sh`.
+
+## Troubleshooting
+
+**`error getting credentials ... docker-credential-desktop.exe: exec format error` (WSL):** the distro can't run Windows binaries. Docker Desktop's WSL integration uses a Windows credential helper, so this breaks image pulls. It usually happens with `systemd=true` in `/etc/wsl.conf`: at boot, `systemd-binfmt` re-registers binary formats (for example QEMU's) and drops WSL's `WSLInterop` entry. Check with `cmd.exe /c ver`. Fix it by registering interop with systemd, then restarting WSL (`wsl.exe --shutdown` from Windows):
+
+```bash
+echo ':WSLInterop:M::MZ::/init:PF' | sudo tee /usr/lib/binfmt.d/WSLInterop.conf
+```
