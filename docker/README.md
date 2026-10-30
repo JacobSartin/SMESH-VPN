@@ -2,7 +2,7 @@
 
 Two VPN clients on separate networks, a discovery server, and a router that joins the networks. All of it runs in Docker.
 
-```
+```text
   site-a 172.30.1.0/24          core 172.30.0.0/24          site-b 172.30.2.0/24
   client-a .10 ──────────── router .254 ───────────────── client-b .10
                                   │
@@ -41,14 +41,14 @@ docker compose -f docker/compose.yaml down -v
 NET_PREFIX=172.31 CLIENT_B_VPN_IP=10.77.0.9/24 MTU=1280 docker/test.sh
 ```
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `NET_PREFIX` | `172.30` | First two octets of the underlay subnets. Change it if it clashes with a local network. |
-| `CLIENT_A_VPN_IP`, `CLIENT_B_VPN_IP` | `10.77.0.2/24`, `10.77.0.3/24` | Overlay address and prefix of each client |
-| `MTU` | `1400` | TUN MTU on the clients |
-| `LISTEN_PORT` | `7777` | Peer session port |
-| `DISCOVERY_PORT` | `8081` | Discovery server port |
-| `DISCOVERY_TTL` | `2m` | How long a registration lives without a heartbeat |
+| Variable                             | Default                        | Meaning                                                                                 |
+| ------------------------------------ | ------------------------------ | --------------------------------------------------------------------------------------- |
+| `NET_PREFIX`                         | `172.30`                       | First two octets of the underlay subnets. Change it if it clashes with a local network. |
+| `CLIENT_A_VPN_IP`, `CLIENT_B_VPN_IP` | `10.77.0.2/24`, `10.77.0.3/24` | Overlay address and prefix of each client                                               |
+| `MTU`                                | `1400`                         | TUN MTU on the clients                                                                  |
+| `LISTEN_PORT`                        | `7777`                         | Peer session port                                                                       |
+| `DISCOVERY_PORT`                     | `8081`                         | Discovery server port                                                                   |
+| `DISCOVERY_TTL`                      | `2m`                           | How long a registration lives without a heartbeat                                       |
 
 **Topologies:** put each topology in an override file layered on `compose.yaml`. [compose.three-clients.yaml](compose.three-clients.yaml) adds a third client on its own site, and is a template for others:
 
@@ -57,6 +57,7 @@ docker/test.sh docker/compose.three-clients.yaml
 ```
 
 To add a client in an override:
+
 1. Add its name to `pki`'s `CLIENTS`.
 2. Attach the router to its network if it's a new one.
 3. Define the service with `extends: { file: compose.yaml, service: client-a }`.
@@ -65,6 +66,7 @@ To add a client in an override:
 `test.sh` picks up every `client-*` service on its own.
 
 **Roles:** the image's entrypoint ([entrypoint.sh](entrypoint.sh)) takes a role: `pki`, `discovery`, `client` or `router`.
+
 - Extra arguments after `client` or `discovery` go to the binary, for example `command: [client, -advertise, 172.30.1.10:7777]`.
 - `ROUTES` (`"CIDR via GATEWAY"`, comma separated) is installed before the discovery server or client starts.
 - Any other command runs as given, for example `docker compose ... run --rm client-a sh`.
