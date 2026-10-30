@@ -114,14 +114,12 @@ func (n *Node) Run(ctx context.Context) error {
 	errCh := make(chan error, 4)
 	var wg sync.WaitGroup
 	start := func(fn func(context.Context) error) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := fn(ctx); err != nil && ctx.Err() == nil {
 				errCh <- err
 				cancel()
 			}
-		}()
+		})
 	}
 	start(n.acceptLoop)
 	start(n.deviceLoop)
