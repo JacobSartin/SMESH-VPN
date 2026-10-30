@@ -6,16 +6,16 @@ _Reviewed 2026-10-07 against `main` @ `7707ccd` (Go 1.27.0). `go build`, `go vet
 
 All phases below are implemented. The four open decisions at the end were confirmed as written. Bugs 1–9 are fixed. Of the minor items in 10, the `LoadCertificate` doc and the rekey stub are fixed (aged sessions are now closed and reconnect with a fresh key exchange); dropped events are still silent.
 
-| Phase | Where | Notes |
-|---|---|---|
-| 0 Housekeeping | `Makefile`, `cmd/Server` | The session listener was removed from the server. |
-| 1 Identity | `pkg/Certs/storage.go`, `pkg/Session/identity.go`, `cmd/Server` (`init-ca`, `issue-client`) | Serials are now random 128-bit, so separate offline runs never collide. |
-| 2 Discovery server | `pkg/Discovery/server.go`, `tls.go` | Moved out of `cmd/Server` so the client can share its types. `GET /peers` excludes the caller. A successful registration returns 200. |
-| 3 Discovery client | `pkg/Discovery/client.go` | |
-| 4 Peer sessions | `pkg/Auth`, `pkg/Session`, `pkg/Mesh` | Peers with the same ID: the newest session wins, so a restarted peer replaces its stale session. |
-| 5 TUN | `pkg/Tun` | Raw fd, `TUNSETIFF`, then `os.NewFile` (opening via `os.OpenFile` left reads stuck). |
-| 6 Client CLI | `cmd/Client` | |
-| 7 Verification | `pkg/Mesh/node_test.go`, `scripts/netns-demo.sh`, `README.md` | The netns script replaces the docker-compose idea. Real-Linux end to end passes. `-race` is clean. |
+| Phase              | Where                                                                                       | Notes                                                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 0 Housekeeping     | `Makefile`, `cmd/Server`                                                                    | The session listener was removed from the server.                                                                                     |
+| 1 Identity         | `pkg/Certs/storage.go`, `pkg/Session/identity.go`, `cmd/Server` (`init-ca`, `issue-client`) | Serials are now random 128-bit, so separate offline runs never collide.                                                               |
+| 2 Discovery server | `pkg/Discovery/server.go`, `tls.go`                                                         | Moved out of `cmd/Server` so the client can share its types. `GET /peers` excludes the caller. A successful registration returns 200. |
+| 3 Discovery client | `pkg/Discovery/client.go`                                                                   |                                                                                                                                       |
+| 4 Peer sessions    | `pkg/Auth`, `pkg/Session`, `pkg/Mesh`                                                       | Peers with the same ID: the newest session wins, so a restarted peer replaces its stale session.                                      |
+| 5 TUN              | `pkg/Tun`                                                                                   | Raw fd, `TUNSETIFF`, then `os.NewFile` (opening via `os.OpenFile` left reads stuck).                                                  |
+| 6 Client CLI       | `cmd/Client`                                                                                |                                                                                                                                       |
+| 7 Verification     | `pkg/Mesh/node_test.go`, `scripts/netns-demo.sh`, `README.md`                               | The netns script replaces the docker-compose idea. Real-Linux end to end passes. `-race` is clean.                                    |
 
 **Found by the Docker environment (`docker/`):** handshake signatures covered `time.Time.MarshalBinary`, whose bytes depend on the time zone. A sender whose `Local` zone is UTC (any container without tzdata) produced signatures that failed after the JSON round trip. Fixed by signing Unix nanoseconds, with a regression test.
 
@@ -34,18 +34,18 @@ Two clients, each with a publicly reachable IP and port (no NAT, no firewall), c
 
 ## Where the code stands
 
-| Area | State | MVP-relevant? |
-|---|---|---|
-| `pkg/AES` (AES-256-GCM) | Done, tested | Yes, as is |
-| `pkg/PQXDH` (X25519 + ML-KEM-768 → HKDF) | Done, tested | Yes, as is |
-| `pkg/Auth` (ML-DSA-signed PQXDH handshake) | Done, tested; identity-binding gaps (below) | Yes: this is the peer handshake |
-| `pkg/Certs` (CA, issuance, verifier, CRL) | Works in memory; **no persistence** | Yes: needs save/load |
-| `pkg/Network` (u16 length-prefixed frames) | Done | Yes, as is |
-| `pkg/Session` (session, manager, events) | Handshake and messaging work; no keepalive, reconnect, or deadlines | Yes: needs completion |
-| `cmd/Server` discovery registry | mTLS-identity registry works; **unreachable in practice** (below) | Yes: needs flags and provisioning |
-| `cmd/Client` | Placeholder: dials the server's `:8080` as if it were a peer | Rewrite |
-| TUN / data plane | Missing entirely | Yes: biggest new piece |
-| CRL, fingerprint cache, `Lock/Unlock`, rekey | Scaffolding | No: leave alone |
+| Area                                         | State                                                               | MVP-relevant?                     |
+| -------------------------------------------- | ------------------------------------------------------------------- | --------------------------------- |
+| `pkg/AES` (AES-256-GCM)                      | Done, tested                                                        | Yes, as is                        |
+| `pkg/PQXDH` (X25519 + ML-KEM-768 → HKDF)     | Done, tested                                                        | Yes, as is                        |
+| `pkg/Auth` (ML-DSA-signed PQXDH handshake)   | Done, tested; identity-binding gaps (below)                         | Yes: this is the peer handshake   |
+| `pkg/Certs` (CA, issuance, verifier, CRL)    | Works in memory; **no persistence**                                 | Yes: needs save/load              |
+| `pkg/Network` (u16 length-prefixed frames)   | Done                                                                | Yes, as is                        |
+| `pkg/Session` (session, manager, events)     | Handshake and messaging work; no keepalive, reconnect, or deadlines | Yes: needs completion             |
+| `cmd/Server` discovery registry              | mTLS-identity registry works; **unreachable in practice** (below)   | Yes: needs flags and provisioning |
+| `cmd/Client`                                 | Placeholder: dials the server's `:8080` as if it were a peer        | Rewrite                           |
+| TUN / data plane                             | Missing entirely                                                    | Yes: biggest new piece            |
+| CRL, fingerprint cache, `Lock/Unlock`, rekey | Scaffolding                                                         | No: leave alone                   |
 
 **Verified during review:** a real ML-DSA-44 mutual-TLS handshake with Go 1.27's `crypto/tls` works end to end (scratch test, since deleted). The existing discovery tests only fake `r.TLS`, so this had not been proven before. `x509.MarshalPKCS8PrivateKey` supports `*mldsa.PrivateKey`, so the CA and client keys can be persisted as standard PEM.
 
@@ -74,6 +74,7 @@ It is mostly accurate on what's missing. It is stale on the toolchain (it says 1
     - Dropped events are silent.
 
 **Known and accepted for the MVP (document, don't fix):**
+
 - Data frames use random-nonce GCM with one key for both directions and no sequence numbers, so there is no replay or reorder detection beyond TCP's.
 - The tunnel runs over TCP (TCP-over-TCP meltdown under loss).
 
@@ -82,12 +83,15 @@ It is mostly accurate on what's missing. It is stale on the toolchain (it says 1
 Phases are ordered by dependency. Sizes are rough: S is under half a day, M is about a day, L is several days.
 
 ### Phase 0: Housekeeping (S)
+
 - Fix the `Makefile`: use `./cmd/Server`, drop the meaningless tag, remove the `.exe` from the Linux server binary name.
 - Remove the `:8080` session listener and the `SessionManager` from `cmd/Server`. Discovery is coordination only. Drop the `manager` field from `DiscoveryServer`.
 - Replace `STATUS.md` with a pointer to this plan.
 
 ### Phase 1: Persistent identity and offline provisioning (M)
+
 _Decision: offline issuance via CLI, no enrollment API. This is the most conservative path and reuses the existing CA code unchanged._
+
 - `pkg/Certs`: `SaveCA(dir)` and `LoadCA(dir)` (PEM certificate plus PKCS#8 key, key file mode `0600`). Add PEM helpers for certificates and keys.
 - `cmd/Server` subcommands:
   - `init-ca --dir`
@@ -98,6 +102,7 @@ _Decision: offline issuance via CLI, no enrollment API. This is the most conserv
 - Tests: CA round trip through disk; a loaded identity completes the authenticated session handshake.
 
 ### Phase 2: Discovery server, runnable (S–M)
+
 - `serve` flags: `--listen :8081`, `--ca-dir`, `--hostname`, `--ip`, `--ttl 2m`.
 - Extend registration with `vpn_ip` (`netip.Addr`, declared by the client). Reject a registration whose `vpn_ip` belongs to another live peer (409). Return it in `PeerRecord`.
 - If the declared endpoint host is unspecified (`0.0.0.0:port`), fill it in from the TLS connection's source IP. This is cheap and makes the no-NAT case work without hand-typing public IPs.
@@ -105,11 +110,13 @@ _Decision: offline issuance via CLI, no enrollment API. This is the most conserv
 - Tests: a **real** mTLS `httptest` server test (replacing the faked `r.TLS` for at least one path), VPN IP conflict handling, and endpoint fill-in.
 
 ### Phase 3: Discovery client library (S)
+
 - New `pkg/Discovery`: an mTLS `http.Client` built from the `ClientIdentity`, plus `Register`, `ListPeers`, `GetPeer`, and `Deregister`.
 - A heartbeat loop that re-registers every `ttl/3`, driven by `context.Context`.
 - Tests run against the real handler over `httptest.NewTLSServer`.
 
 ### Phase 4: Peer sessions (M–L)
+
 - **Handshake hardening:** fix bugs 1–4 and 6.
   - Derive the peer ID from the certificate and reject a mismatched `hello.ID`.
   - Verify with ClientAuth EKU.
@@ -127,7 +134,9 @@ _Decision: offline issuance via CLI, no enrollment API. This is the most conserv
 - Tests: two in-process peers find each other through an in-process discovery server and exchange frames; a dropped connection reconnects.
 
 ### Phase 5: TUN data plane, Linux only (M–L)
+
 _Decision: Linux only for the MVP. Windows needs Wintun (a driver DLL plus a non-stdlib binding), which goes against the stdlib-only direction of `dffd026`/`43faf64`._
+
 - `pkg/Tun`: open `/dev/net/tun` with `TUNSETIFF` (`IFF_TUN|IFF_NO_PI`) using `syscall`. Configure the address, MTU (1400), and link-up by shelling out to `ip`. This stays stdlib-only and is easy to read. Hide it behind a small `Device` interface (`Read`, `Write`, `Close`) so tests can use an in-memory fake.
 - Packet loop:
   - TUN → parse the IPv4 destination → look up the session by overlay IP → `Send`.
@@ -137,6 +146,7 @@ _Decision: Linux only for the MVP. Windows needs Wintun (a driver DLL plus a non
 - Requires root or `CAP_NET_ADMIN`. Document this.
 
 ### Phase 6: Client CLI (S)
+
 - Flags:
   - `--discovery https://host:8081`
   - `--cert`, `--key`, `--ca`
@@ -147,14 +157,17 @@ _Decision: Linux only for the MVP. Windows needs Wintun (a driver DLL plus a non
 - Startup: load identity → bring up TUN → register and heartbeat → peer manager → packet loop. On SIGINT: deregister, close sessions, remove the TUN.
 
 ### Phase 7: Verification and docs (S–M)
+
 - An in-process end-to-end test: discovery plus two peers with fake TUN devices, where an IPv4 packet injected at A comes out at B.
 - A manual acceptance test: two Linux hosts or containers, then `ping` across the overlay in both directions. A minimal `docker-compose.yml` with `NET_ADMIN` is the cheapest way to make this repeatable, and the README already promises one.
 - Rewrite the README run instructions (provisioning, server, client). Remove the claims that aren't true yet (Docker until added, CRL-based revocation, Windows client). Add the LICENSE file the README references.
 
 ## Deferred (post-MVP)
+
 NAT traversal and relaying, Windows (Wintun), UDP transport, real rekeying, per-direction keys with counter nonces and replay windows, CRL distribution through discovery, an online enrollment API, server-assigned overlay IPs, config files, IPv6 overlay, race-detector CI.
 
 ## Open decisions (defaults assumed above)
+
 1. **Linux-only data plane for the MVP:** assumed yes.
 2. **Offline certificate issuance** rather than an enrollment endpoint: assumed yes.
 3. **Overlay IPs set by a client flag** and conflict-checked by the server, rather than server-assigned: assumed yes.
