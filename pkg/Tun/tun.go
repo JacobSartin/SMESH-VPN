@@ -5,6 +5,7 @@ package tun
 import "io"
 
 // DefaultMTU leaves room for TCP/IP headers and session framing on a 1500-byte path.
+// TODO: formalize overhead and calculate exact mtu
 const DefaultMTU = 1400
 
 // Device is a layer-3 virtual interface. Each Read returns one IP packet and
