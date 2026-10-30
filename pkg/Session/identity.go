@@ -43,7 +43,7 @@ type ClientIdentity struct {
 	// IsLocked indicates if the identity is currently locked (requiring authentication)
 	isLocked bool
 	// Additional metadata
-	Metadata map[string]interface{}
+	Metadata map[string]any
 }
 
 // NewClientIdentity creates a new client identity
@@ -51,7 +51,7 @@ func NewClientIdentity() *ClientIdentity {
 	return &ClientIdentity{
 		CreatedAt:  time.Now(),
 		DeviceInfo: make(map[string]string),
-		Metadata:   make(map[string]interface{}),
+		Metadata:   make(map[string]any),
 		isLocked:   false,
 	}
 }

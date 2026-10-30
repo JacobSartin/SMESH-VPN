@@ -62,7 +62,7 @@ type CertificateAuthority struct {
 	// IsLocked indicates if the CA is currently locked (requiring authentication)
 	IsLocked bool
 	// Metadata contains additional information about the CA
-	Metadata map[string]interface{}
+	Metadata map[string]any
 	// DeviceInfo contains information about the CA device
 	DeviceInfo map[string]string
 	// Certificate is the template used for generating new certificates
@@ -107,7 +107,7 @@ func newCertificateAuthority(priv *mldsa.PrivateKey, createdAt, expiresAt time.T
 		CreatedAt:       createdAt,
 		ExpiresAt:       expiresAt,
 		IsLocked:        false,
-		Metadata:        make(map[string]interface{}),
+		Metadata:        make(map[string]any),
 		DeviceInfo:      make(map[string]string),
 		CleanupInterval: 24 * time.Hour, // Daily cleanup
 		StopCleanup:     make(chan struct{}),

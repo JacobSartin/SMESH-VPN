@@ -77,7 +77,7 @@ type PeerInfo struct {
 	// LastSeen tracks when we last had contact with this peer
 	LastSeen time.Time
 	// AdditionalInfo can store any extra peer metadata
-	AdditionalInfo map[string]interface{}
+	AdditionalInfo map[string]any
 }
 
 // Session represents an encrypted communication session with a peer
