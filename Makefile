@@ -1,4 +1,4 @@
-.PHONY: all client server clean
+.PHONY: all client server clean test docker-test
 
 all: clean client server
 
@@ -10,5 +10,12 @@ server:
 	env GOOS=linux GOARCH=amd64 go build -o bin/smesh-server_linux_amd64 ./cmd/Server
 	env GOOS=windows GOARCH=amd64 go build -o bin/smesh-server_windows_amd64.exe ./cmd/Server
 
+test:
+	go vet ./...
+	go test ./...
+
 clean:
 	rm -rf bin/
+
+docker-test:
+	sh docker/test.sh

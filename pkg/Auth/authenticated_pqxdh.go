@@ -16,9 +16,10 @@ import (
 
 // Errors for authenticated key exchange
 var (
-	ErrInvalidCertificate = errors.New("invalid certificate")
-	ErrHandshakeTimeout   = errors.New("handshake timeout")
-	ErrInvalidSignature   = errors.New("invalid handshake signature")
+	ErrInvalidCertificate  = errors.New("invalid certificate")
+	ErrHandshakeTimeout    = errors.New("handshake timeout")
+	ErrInvalidSignature    = errors.New("invalid handshake signature")
+	ErrHandshakeOutOfOrder = errors.New("server response processed before client hello was created")
 )
 
 // AuthenticatedPQXDHClient extends PQXDH client with certificate authentication
@@ -27,7 +28,7 @@ type AuthenticatedPQXDHClient struct {
 	certificate *x509.Certificate
 	privateKey  *mldsa.PrivateKey
 	verifier    *certs.ClientCertificateVerifier
-	id          uuid.UUID // Optional client ID for identification
+	helloHash   []byte
 }
 
 // AuthenticatedPQXDHServer extends PQXDH server with certificate authentication
@@ -38,9 +39,12 @@ type AuthenticatedPQXDHServer struct {
 	verifier    *certs.ClientCertificateVerifier // Unified approach for certificate verification
 }
 
-// NewAuthenticatedPQXDHClient creates a new authenticated PQXDH client
-// privKey should be the private key corresponding to the server's certificate
-func NewAuthenticatedPQXDHClient(cert *x509.Certificate, privKey *mldsa.PrivateKey, verifier *certs.ClientCertificateVerifier, id uuid.UUID) (*AuthenticatedPQXDHClient, error) {
+// NewAuthenticatedPQXDHClient creates a new authenticated PQXDH client.
+// cert must be a client certificate carrying a client ID.
+func NewAuthenticatedPQXDHClient(cert *x509.Certificate, privKey *mldsa.PrivateKey, verifier *certs.ClientCertificateVerifier) (*AuthenticatedPQXDHClient, error) {
+	if _, err := certs.ClientIDFromCertificate(cert); err != nil {
+		return nil, err
+	}
 	pqxdhClient, err := pqxdh.NewPQXDHClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PQXDH client: %w", err)
@@ -51,7 +55,6 @@ func NewAuthenticatedPQXDHClient(cert *x509.Certificate, privKey *mldsa.PrivateK
 		certificate: cert,
 		privateKey:  privKey,
 		verifier:    verifier,
-		id:          id,
 	}, nil
 }
 
@@ -73,102 +76,101 @@ func NewAuthenticatedPQXDHServer(cert *x509.Certificate, privKey *mldsa.PrivateK
 
 // CreateClientHello creates an authenticated client hello message
 func (ac *AuthenticatedPQXDHClient) CreateClientHello() (*AuthenticatedHandshakeHello, error) {
-	// Get PQXDH public keys
-	pqPubKey := ac.pqxdhClient.GetPQPublicKey()
-	ecPubKey := ac.pqxdhClient.GetECPublicKey()
-
-	// Serialize public keys
-	pqPubKeyBytes := pqPubKey.Bytes()
-	ecPubKeyBytes := ecPubKey.Bytes()
-
-	// Create handshake message
 	msg := &AuthenticatedHandshakeHello{
-		PQPublicKey: pqPubKeyBytes,
-		ECPublicKey: ecPubKeyBytes,
+		PQPublicKey: ac.pqxdhClient.GetPQPublicKey().Bytes(),
+		ECPublicKey: ac.pqxdhClient.GetECPublicKey().Bytes(),
 		Certificate: ac.certificate.Raw,
 		Timestamp:   time.Now(),
-		ID:          ac.id,
 	}
 
-	// Sign the message using the message's Sign method
 	if err := msg.Sign(ac.privateKey); err != nil {
 		return nil, fmt.Errorf("failed to sign client hello: %w", err)
 	}
 
+	ac.helloHash = msg.transcriptHash()
+
 	return msg, nil
 }
 
-// ProcessClientHello processes an authenticated client hello and returns server response
-func (as *AuthenticatedPQXDHServer) ProcessClientHello(clientHello *AuthenticatedHandshakeHello) (response *AuthenticatedHandshakeResponse, key []byte, err error) {
-	// Validate client certificate using the verifier
-	_, err = as.verifier.VerifyPeerCertificate(clientHello.Certificate)
+// ProcessClientHello processes an authenticated client hello and returns the
+// server response, the shared key, and the initiator's verified client ID.
+func (as *AuthenticatedPQXDHServer) ProcessClientHello(clientHello *AuthenticatedHandshakeHello) (response *AuthenticatedHandshakeResponse, key []byte, peerID uuid.UUID, err error) {
+	peerID, err = verifiedPeerID(as.verifier, clientHello.Certificate)
 	if err != nil {
-		return nil, nil, fmt.Errorf("client certificate verification failed: %w", err)
+		return nil, nil, uuid.Nil(), fmt.Errorf("client certificate verification failed: %w", err)
 	}
 
-	err = clientHello.Verify()
-	if err != nil {
-		return nil, nil, err
+	if err := clientHello.Verify(); err != nil {
+		return nil, nil, uuid.Nil(), err
 	}
 
-	// Parse client PQXDH public keys
 	clientPQPubKey, err := pqxdh.ParsePQPublicKey(clientHello.PQPublicKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse client PQ public key: %w", err)
+		return nil, nil, uuid.Nil(), fmt.Errorf("failed to parse client PQ public key: %w", err)
 	}
 
 	clientECPubKey, err := pqxdh.ParseECPublicKey(clientHello.ECPublicKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse client EC public key: %w", err)
+		return nil, nil, uuid.Nil(), fmt.Errorf("failed to parse client EC public key: %w", err)
 	}
 
-	// Perform PQXDH server key exchange
 	sharedKey, ciphertext, err := pqxdh.ServerKeyExchange(clientPQPubKey, clientECPubKey, *as.pqxdhServer)
 	if err != nil {
-		return nil, nil, fmt.Errorf("PQXDH server key exchange failed: %w", err)
+		return nil, nil, uuid.Nil(), fmt.Errorf("PQXDH server key exchange failed: %w", err)
 	}
 
-	// Create server response
-	serverECPubKey := as.pqxdhServer.GetECPublicKey()
 	response = &AuthenticatedHandshakeResponse{
-		ECPublicKey: serverECPubKey.Bytes(),
+		ECPublicKey: as.pqxdhServer.GetECPublicKey().Bytes(),
 		Certificate: as.certificate.Raw,
 		Ciphertext:  ciphertext,
 		Timestamp:   time.Now(),
 	}
 
-	// Sign server response using the message's Sign method
-	if err := response.Sign(as.privateKey); err != nil {
-		return nil, nil, fmt.Errorf("failed to sign server response: %w", err)
+	if err := response.Sign(as.privateKey, clientHello.transcriptHash()); err != nil {
+		return nil, nil, uuid.Nil(), fmt.Errorf("failed to sign server response: %w", err)
 	}
 
-	return response, sharedKey, nil
+	return response, sharedKey, peerID, nil
 }
 
-// ProcessServerResponse processes the authenticated server response and derives shared key
-func (ac *AuthenticatedPQXDHClient) ProcessServerResponse(serverResponse *AuthenticatedHandshakeResponse) (key []byte, err error) {
-	// Validate server certificate
-	_, err = ac.verifier.VerifyPeerCertificate(serverResponse.Certificate)
-	if err != nil {
-		return nil, fmt.Errorf("certificate validation failed: %w", err)
+// ProcessServerResponse processes the authenticated server response and derives
+// the shared key. It returns the responder's verified client ID.
+func (ac *AuthenticatedPQXDHClient) ProcessServerResponse(serverResponse *AuthenticatedHandshakeResponse) (key []byte, peerID uuid.UUID, err error) {
+	if ac.helloHash == nil {
+		return nil, uuid.Nil(), ErrHandshakeOutOfOrder
 	}
 
-	err = serverResponse.Verify()
+	peerID, err = verifiedPeerID(ac.verifier, serverResponse.Certificate)
 	if err != nil {
-		return nil, err
+		return nil, uuid.Nil(), fmt.Errorf("certificate validation failed: %w", err)
 	}
 
-	// Parse server EC public key
+	if err := serverResponse.Verify(ac.helloHash); err != nil {
+		return nil, uuid.Nil(), err
+	}
+
 	serverECPubKey, err := pqxdh.ParseECPublicKey(serverResponse.ECPublicKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse server EC public key: %w", err)
+		return nil, uuid.Nil(), fmt.Errorf("failed to parse server EC public key: %w", err)
 	}
 
-	// Perform PQXDH client key exchange
 	sharedKey, err := pqxdh.ClientKeyExchange(serverECPubKey, serverResponse.Ciphertext, *ac.pqxdhClient)
 	if err != nil {
-		return nil, fmt.Errorf("PQXDH client key exchange failed: %w", err)
+		return nil, uuid.Nil(), fmt.Errorf("PQXDH client key exchange failed: %w", err)
 	}
 
-	return sharedKey, nil
+	return sharedKey, peerID, nil
+}
+
+// verifiedPeerID checks certDER against the trusted CA and returns the client ID it carries.
+func verifiedPeerID(verifier *certs.ClientCertificateVerifier, certDER []byte) (uuid.UUID, error) {
+	cert, err := verifier.VerifyPeerCertificate(certDER)
+	if err != nil {
+		return uuid.Nil(), err
+	}
+	id, err := certs.ClientIDFromCertificate(cert)
+	if err != nil {
+		return uuid.Nil(), err
+	}
+	return id, nil
 }

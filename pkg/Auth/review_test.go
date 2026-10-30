@@ -50,18 +50,14 @@ func reviewCA(t *testing.T) (*certs.CertificateAuthority, *certs.ClientCertifica
 	return ca, verifier
 }
 
-// The hello carries a self-asserted ID. The server never checks that it
-// matches the identity bound into the certificate, so a peer holding a valid
-// certificate for A can introduce itself as B. The session manager then
-// indexes the session under B.
-func TestHelloIDMustMatchCertificateIdentity(t *testing.T) {
+// A peer holding a valid certificate for A must not be able to introduce
+// itself as B. The initiator's identity comes only from its certificate.
+func TestInitiatorIdentityComesFromCertificate(t *testing.T) {
 	ca, verifier := reviewCA(t)
-	victim := issueReviewPeer(t, ca)
 	attacker := issueReviewPeer(t, ca)
 	serverPeer := issueReviewPeer(t, ca)
 
-	// Attacker signs a hello with their own certificate but claims victim's ID.
-	client, err := NewAuthenticatedPQXDHClient(attacker.cert, attacker.key, verifier, victim.id)
+	client, err := NewAuthenticatedPQXDHClient(attacker.cert, attacker.key, verifier)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +70,12 @@ func TestHelloIDMustMatchCertificateIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := server.ProcessClientHello(hello); err == nil {
-		t.Fatalf("server accepted a hello whose ID %s does not match the certificate identity %s", victim.id, attacker.id)
+	_, _, peerID, err := server.ProcessClientHello(hello)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peerID != attacker.id {
+		t.Fatalf("server attributed the hello to %s, want certificate identity %s", peerID, attacker.id)
 	}
 }
 
@@ -91,7 +91,7 @@ func TestResponseIsBoundToTheHelloItAnswers(t *testing.T) {
 	bob := issueReviewPeer(t, ca)
 	mallory := issueReviewPeer(t, ca)
 
-	aliceClient, err := NewAuthenticatedPQXDHClient(alice.cert, alice.key, verifier, alice.id)
+	aliceClient, err := NewAuthenticatedPQXDHClient(alice.cert, alice.key, verifier)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,6 @@ func TestResponseIsBoundToTheHelloItAnswers(t *testing.T) {
 		ECPublicKey: aliceHello.ECPublicKey,
 		Certificate: mallory.cert.Raw,
 		Timestamp:   aliceHello.Timestamp,
-		ID:          mallory.id,
 	}
 	if err := malloryHello.Sign(mallory.key); err != nil {
 		t.Fatal(err)
@@ -116,13 +115,13 @@ func TestResponseIsBoundToTheHelloItAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, bobKey, err := bobServer.ProcessClientHello(malloryHello)
+	response, bobKey, _, err := bobServer.ProcessClientHello(malloryHello)
 	if err != nil {
 		t.Fatalf("bob rejected mallory's (validly signed) hello: %v", err)
 	}
 
 	// Mallory forwards Bob's response to Alice unchanged.
-	aliceKey, err := aliceClient.ProcessServerResponse(response)
+	aliceKey, _, err := aliceClient.ProcessServerResponse(response)
 	if err == nil && bytes.Equal(aliceKey, bobKey) {
 		t.Fatalf("identity misbinding: alice and bob share a key, but bob attributes the session to mallory (%s)", mallory.id)
 	}
@@ -148,19 +147,25 @@ func TestPeerVerifierRejectsNonClientCertificates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	client, err := NewAuthenticatedPQXDHClient(tlsCert, tlsKey, verifier, uuid.NewV7())
+	// The client constructor already refuses a certificate without a client
+	// identity, so build the hello by hand to exercise the server's check.
+	keySource, err := NewAuthenticatedPQXDHClient(serverPeer.cert, serverPeer.key, verifier)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hello, err := client.CreateClientHello()
+	hello, err := keySource.CreateClientHello()
 	if err != nil {
+		t.Fatal(err)
+	}
+	hello.Certificate = tlsCert.Raw
+	if err := hello.Sign(tlsKey); err != nil {
 		t.Fatal(err)
 	}
 	server, err := NewAuthenticatedPQXDHServer(serverPeer.cert, serverPeer.key, verifier)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := server.ProcessClientHello(hello); err == nil {
+	if _, _, _, err := server.ProcessClientHello(hello); err == nil {
 		t.Fatal("a server-auth-only TLS certificate was accepted as a mesh peer identity")
 	}
 }

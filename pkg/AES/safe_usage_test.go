@@ -102,7 +102,7 @@ func TestWithAES256Panic(t *testing.T) {
 	var cipher *AES256
 
 	// Use recover to catch the panic
-	var recovered interface{}
+	var recovered any
 	func() {
 		defer func() {
 			recovered = recover()

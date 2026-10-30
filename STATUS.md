@@ -1,47 +1,8 @@
-# SMESH-VPN Codebase Status
+# SMESH-VPN Status
 
-## Current Status
+**MVP implemented (2026-10-07).** Two Linux peers that can reach each other directly can join an overlay network through the discovery server and exchange IP traffic over post-quantum authenticated, encrypted sessions. This has been verified end to end with `scripts/netns-demo.sh` (ping both ways, including full-MTU packets).
 
-SMESH-VPN is currently a promising crypto/session prototype, not yet a functional VPN. The repository has working pieces for AES-GCM encryption, hybrid PQXDH-style key exchange, certificate issuance/verification, CRL handling, authenticated handshakes, unauthenticated no-certificate session setup, basic session management, and a minimal in-memory discovery registry.
+- Scope, design decisions, and the deferred list: [docs/MVP_PLAN.md](docs/MVP_PLAN.md)
+- How to run it: [README.md](README.md)
 
-The existing validation baseline is mostly healthy:
-
-- `go test ./...` passes with Go `1.26.3`.
-- `go vet ./...` passes with Go `1.26.3`.
-
-The client and server can now establish sessions without certificate material by using the unauthenticated PQXDH path. The server also exposes a simple HTTP discovery API for peer registration, lookup, listing, and removal. The pieces are still scaffolding rather than a complete VPN workflow.
-
-## Biggest Weak Points
-
-- The discovery server has a minimal peer registry, but clients are not yet integrated with it for automatic peer discovery or connection brokering.
-- The TUN/TAP data plane is missing. The `tunnel interface{}` field is only a placeholder, and there is no packet loop, route setup, MTU handling, or OS integration.
-- The unauthenticated handshake path is intentionally temporary and does not authenticate peers. The certificate-authenticated path still exists, but certificate runtime provisioning is deferred while connection coordination is built incrementally.
-- Replay protection for the authenticated handshake is timestamp-only. Old messages are rejected, but there is no nonce/session cache and future timestamps are not explicitly rejected.
-- Rekeying is a stub. `RekeyIfNeeded` changes status and timestamps, but does not run a fresh key exchange or replace the active cipher key.
-
-## Missing
-
-- Configuration through CLI flags or config files for server address, listen address, certificate paths, key paths, CA roots, CRLs, timeouts, and peer settings.
-- Client integration with the discovery API for register/list/connect workflows.
-- Connection brokering behavior for peers that cannot directly dial each other.
-- TUN/TAP implementation and packet forwarding loop.
-- Reconnect, retry, shutdown, and cancellation behavior using `context.Context`.
-- More session and network tests, especially for listener-driven connection setup, close behavior, failed handshakes, and network framing edge cases.
-- Certificate/key lifecycle once authentication is reintroduced: persisted identity loading, CA trust setup, CRL refresh flow, and enrollment command path.
-- Race-test coverage once CGO/race tooling is available.
-- Coverage reporting once the local Go toolchain issue is fixed.
-- Docker files referenced by the README.
-- A license file referenced by the README.
-
-## Verification Notes
-
-The following commands passed:
-
-```text
-go test ./...
-go vet ./...
-```
-
-The following checks were blocked by local toolchain or environment configuration:
-
-- `go test -race ./...` failed because race testing requires CGO support, and `CGO_ENABLED` was disabled by default. Enabling CGO still failed in this environment due Go race runtime package resolution errors.
+Validation: `go vet ./...`, `go test ./...`, and `go test -race ./...` (on Linux) pass with Go 1.27.0.
