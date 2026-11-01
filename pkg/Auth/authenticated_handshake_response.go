@@ -2,7 +2,6 @@ package auth
 
 import (
 	"crypto/mldsa"
-	"fmt"
 	"slices"
 	"time"
 )
@@ -23,32 +22,26 @@ type AuthenticatedHandshakeResponse struct {
 	Ciphertext []byte `json:"ciphertext"` // ML-KEM encapsulated secret
 }
 
-// Sign signs the handshake response message with the provided private key.
-func (msg *AuthenticatedHandshakeResponse) signatureData() ([]byte, error) {
-	timestampBytes, err := msg.Timestamp.MarshalBinary()
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal timestamp: %w", err)
-	}
-	return slices.Concat(msg.ECPublicKey, msg.Certificate, msg.Ciphertext, timestampBytes), nil
+// signatureData covers the response fields and the hash of the hello being answered,
+// so a response cannot be replayed against a different hello.
+func (msg *AuthenticatedHandshakeResponse) signatureData(helloHash []byte) []byte {
+	return slices.Concat(helloHash, msg.ECPublicKey, msg.Certificate, msg.Ciphertext, timestampBytes(msg.Timestamp))
 }
 
-func (msg *AuthenticatedHandshakeResponse) Sign(privateKey *mldsa.PrivateKey) error {
-	data, err := msg.signatureData()
+// Sign signs the handshake response message, bound to the given hello hash.
+func (msg *AuthenticatedHandshakeResponse) Sign(privateKey *mldsa.PrivateKey, helloHash []byte) error {
+	signature, err := signHandshake(privateKey, msg.signatureData(helloHash))
 	if err != nil {
 		return err
 	}
-	msg.Signature, err = signHandshake(privateKey, data)
-	return err
+	msg.Signature = signature
+	return nil
 }
 
-// Verify verifies the signature of the handshake response message
-func (msg *AuthenticatedHandshakeResponse) Verify() error {
+// Verify verifies the signature of the handshake response message against the hello hash.
+func (msg *AuthenticatedHandshakeResponse) Verify(helloHash []byte) error {
 	if !validHandshakeTime(msg.Timestamp) {
 		return ErrHandshakeTimeout
 	}
-	data, err := msg.signatureData()
-	if err != nil {
-		return err
-	}
-	return verifyHandshake(msg.Certificate, data, msg.Signature)
+	return verifyHandshake(msg.Certificate, msg.signatureData(helloHash), msg.Signature)
 }

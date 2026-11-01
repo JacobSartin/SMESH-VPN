@@ -48,13 +48,13 @@ func TestDataChannelRejectsReplayAndReflection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := b.Receive(frame); err != nil {
+	if _, err := b.decrypt(frame); err != nil {
 		t.Fatalf("first delivery should succeed: %v", err)
 	}
-	if _, err := b.Receive(frame); err == nil {
+	if _, err := b.decrypt(frame); err == nil {
 		t.Error("replayed frame was accepted a second time")
 	}
-	if _, err := a.Receive(frame); err == nil {
+	if _, err := a.decrypt(frame); err == nil {
 		t.Error("sender accepted its own frame reflected back (no direction binding)")
 	}
 }

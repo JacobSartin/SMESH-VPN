@@ -5,6 +5,7 @@ import (
 	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/binary"
 	"time"
 )
 
@@ -32,4 +33,11 @@ func verifyHandshake(certificate, data, signature []byte) error {
 func validHandshakeTime(timestamp time.Time) bool {
 	delta := time.Since(timestamp)
 	return delta >= -maxHandshakeClockSkew && delta <= maxHandshakeClockSkew
+}
+
+// timestampBytes encodes t for signing. Only the instant is encoded: JSON
+// decoding can change a timestamp's location, which would alter
+// time.Time.MarshalBinary output and break the signature.
+func timestampBytes(t time.Time) []byte {
+	return binary.BigEndian.AppendUint64(nil, uint64(t.UnixNano()))
 }

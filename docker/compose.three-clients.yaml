@@ -1,0 +1,24 @@
+# Example override: a third client on its own site network.
+#   docker compose -f docker/compose.yaml -f docker/compose.three-clients.yaml up -d
+#   docker/test.sh docker/compose.three-clients.yaml
+services:
+  pki:
+    environment:
+      CLIENTS: client-a client-b client-c
+
+  router:
+    networks:
+      site-c: { ipv4_address: "${NET_PREFIX:-172.30}.3.254" }
+
+  client-c:
+    extends: { file: compose.yaml, service: client-a }
+    environment:
+      CLIENT_NAME: client-c
+      VPN_IP: ${CLIENT_C_VPN_IP:-10.77.0.4/24}
+      ROUTES: ${NET_PREFIX:-172.30}.0.0/16 via ${NET_PREFIX:-172.30}.3.254
+    networks: !override
+      site-c: { ipv4_address: "${NET_PREFIX:-172.30}.3.10" }
+
+networks:
+  site-c:
+    ipam: { config: [{ subnet: "${NET_PREFIX:-172.30}.3.0/24" }] }

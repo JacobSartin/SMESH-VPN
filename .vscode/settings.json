@@ -1,6 +1,3 @@
 {
-  "makefile.configureOnOpen": false,
-  "gopls": {
-    "buildFlags": ["-tags=server"]
-  }
+  "makefile.configureOnOpen": false
 }

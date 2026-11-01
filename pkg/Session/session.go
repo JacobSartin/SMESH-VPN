@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -24,16 +25,38 @@ const (
 	StatusInitializing Status = iota
 	// StatusEstablished means the session is active and authenticated
 	StatusEstablished
-	// StatusRekeying means the session is performing key rotation
-	StatusRekeying
 	// StatusClosed means the session has been terminated
 	StatusClosed
 )
 
+// handshakeTimeout bounds dialing and the whole key exchange. Tests shorten it.
+var handshakeTimeout = 10 * time.Second
+
+// writeTimeout bounds how long writing one frame may block. A peer that stops
+// reading would otherwise block its writers indefinitely. Tests shorten it.
+var writeTimeout = 10 * time.Second
+
+// The first handshake frame starts with a protocol version and a mode byte so
+// that peers configured differently fail with a clear error.
+const (
+	protocolVersion              byte = 1
+	handshakeModeUnauthenticated byte = 0
+	handshakeModeAuthenticated   byte = 1
+)
+
+// Frame types carried as the first plaintext byte of every encrypted frame.
+const (
+	frameData      byte = 0
+	frameKeepalive byte = 1
+)
+
 // Errors related to session management
 var (
-	ErrSessionClosed = errors.New("session has been closed")
-	ErrInvalidPeer   = errors.New("invalid peer information")
+	ErrSessionClosed         = errors.New("session has been closed")
+	ErrInvalidPeer           = errors.New("invalid peer information")
+	ErrUnexpectedPeer        = errors.New("peer certificate does not match the expected peer ID")
+	ErrHandshakeMismatch     = errors.New("peer uses an incompatible handshake")
+	ErrSessionNotEstablished = errors.New("session not established")
 )
 
 type unauthenticatedHandshakeHello struct {
@@ -49,16 +72,16 @@ type unauthenticatedHandshakeResponse struct {
 
 // PeerInfo contains information about a peer in the VPN mesh
 type PeerInfo struct {
-	// ID is a unique UUIDv7 identifier for the peer.
+	// ID is the peer's client ID. For authenticated sessions it comes from the peer's certificate.
 	ID uuid.UUID
 	// Address is the network address of the peer
 	Address net.Addr
-	// Certificate can be used for certificate-based auth
+	// Certificate is the peer's verified certificate, if the session is authenticated
 	Certificate x509.Certificate
 	// LastSeen tracks when we last had contact with this peer
 	LastSeen time.Time
 	// AdditionalInfo can store any extra peer metadata
-	AdditionalInfo map[string]interface{}
+	AdditionalInfo map[string]any
 }
 
 // Session represents an encrypted communication session with a peer
@@ -66,51 +89,54 @@ type Session struct {
 	connection net.Conn // The underlying network connection for this session
 	// mutex for synchronized access to session data
 	mu sync.RWMutex
+	// writeMu serializes frames written to connection
+	writeMu sync.Mutex
 	// peer contains information about the remote peer
 	peer PeerInfo
 	// cipher is the AES encryption instance
 	cipher *aes.AES256
 	// status tracks the current session state
 	status Status
-	// established records when the session was created
+	// established records when the session key was agreed
 	established time.Time
-	// lastActivity records the last time the session was used
+	// lastActivity records the last time a frame was received from the peer
 	lastActivity time.Time
 	// closed is set to true when the session is terminated
 	closed bool
 	// sessionID is a unique identifier for this session
 	sessionID uuid.UUID
-	// Additional fields would be added as needed:
-	// - Traffic statistics
-	// - Quality metrics
-	// - Configuration parameters
-	// - Routes and forwarding rules
 }
 
-// NewSession creates a new session with the given peer
-func NewSession(peer PeerInfo, identity *ClientIdentity) (*Session, error) {
+// NewSession dials the peer and performs the key exchange. With an authenticated
+// identity, the peer's certificate must carry peer.ID. Cancelling ctx aborts
+// the dial and the handshake.
+func NewSession(ctx context.Context, peer PeerInfo, identity *ClientIdentity) (*Session, error) {
 	if peer.ID == uuid.Nil() || peer.Address == nil {
 		return nil, ErrInvalidPeer
 	}
 
-	// initialize the connection
-	conn, err := connect(peer.Address.String())
+	dialer := net.Dialer{Timeout: handshakeTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", peer.Address.String())
 	if err != nil {
 		return nil, err
 	}
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
 
 	session := &Session{
-		connection:   conn,
-		peer:         peer,
-		status:       StatusInitializing,
-		established:  time.Now(),
-		lastActivity: time.Now(),
-		sessionID:    uuid.NewV7(),
+		connection: conn,
+		peer:       peer,
+		status:     StatusInitializing,
+		sessionID:  uuid.NewV7(),
 	}
 
-	// Perform the key exchange to establish encryption
-	if err := session.EstablishKeyExchange(identity); err != nil {
-		conn.Close() // Close the connection if key exchange fails
+	err = session.EstablishKeyExchange(identity)
+	if !stop() {
+		// ctx was cancelled and the connection closed, whether or not the handshake finished.
+		session.Close()
+		return nil, context.Cause(ctx)
+	}
+	if err != nil {
+		conn.Close()
 		return nil, fmt.Errorf("failed to establish key exchange: %w", err)
 	}
 
@@ -123,21 +149,45 @@ func NewSessionFromConn(conn net.Conn, identity *ClientIdentity) (*Session, erro
 		return nil, errors.New("connection cannot be nil")
 	}
 
-	if !hasAuthenticatedIdentity(identity) {
-		return newUnauthenticatedSessionFromConn(conn)
+	_ = conn.SetDeadline(time.Now().Add(handshakeTimeout))
+	var (
+		session *Session
+		err     error
+	)
+	if hasAuthenticatedIdentity(identity) {
+		session, err = newAuthenticatedSessionFromConn(conn, identity)
+	} else {
+		session, err = newUnauthenticatedSessionFromConn(conn)
 	}
-
-	// Read the peer's hello message
-	helloBytes, err := network.RecvWithLen(conn)
 	if err != nil {
-		conn.Close() // Close the connection if reading fails
-		return nil, fmt.Errorf("failed to read hello message: %w", err)
+		conn.Close()
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Time{})
+
+	return session, nil
+}
+
+func newAuthenticatedSessionFromConn(conn net.Conn, identity *ClientIdentity) (*Session, error) {
+	helloBytes, err := recvHandshake(conn, handshakeModeAuthenticated)
+	if err != nil {
+		return nil, err
 	}
 
-	// Unmarshal the hello message
 	hello := &auth.AuthenticatedHandshakeHello{}
 	if err := json.Unmarshal(helloBytes, hello); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal hello: %w", err)
+	}
+
+	exchange, err := auth.NewAuthenticatedPQXDHServer(identity.Certificate, identity.PrivateKey, identity.Verifier)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create authenticated PQXDH server: %w", err)
+	}
+
+	// ProcessClientHello verifies the certificate and returns the client ID it carries.
+	response, key, peerID, err := exchange.ProcessClientHello(hello)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process client hello: %w", err)
 	}
 
 	peerCert, err := x509.ParseCertificate(hello.Certificate)
@@ -145,73 +195,37 @@ func NewSessionFromConn(conn net.Conn, identity *ClientIdentity) (*Session, erro
 		return nil, fmt.Errorf("failed to parse peer certificate: %w", err)
 	}
 
-	// create a new session with the peer information
-	peer := PeerInfo{
-		ID:          hello.ID,
-		Address:     conn.RemoteAddr(),
-		Certificate: *peerCert,
-		LastSeen:    time.Now(),
-	}
-
-	session := &Session{
-		connection:   conn,
-		peer:         peer,
-		status:       StatusInitializing,
-		established:  time.Now(),
-		lastActivity: time.Now(),
-		sessionID:    uuid.NewV7(),
-	}
-
-	// finish the exchange
-	exchange, err := auth.NewAuthenticatedPQXDHServer(identity.Certificate, identity.PrivateKey, identity.Verifier)
-	if err != nil {
-		conn.Close() // Close the connection if exchange creation fails
-		return nil, fmt.Errorf("failed to create authenticated PQXDH server: %w", err)
-	}
-
-	response, key, err := exchange.ProcessClientHello(hello)
-	if err != nil {
-		conn.Close() // Close the connection if processing fails
-		return nil, fmt.Errorf("failed to process client hello: %w", err)
-	}
-
-	// set the session's cipher with the derived key
 	cipher, err := aes.NewAES256(key)
 	if err != nil {
-		conn.Close() // Close the connection if cipher creation fails
 		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
 	}
 
-	session.cipher = cipher
-
-	// send the response back to the client
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
-		conn.Close() // Close the connection if marshaling fails
+		cipher.Close()
 		return nil, fmt.Errorf("failed to marshal response: %w", err)
 	}
 
-	err = network.SendWithLen(conn, responseBytes)
-	if err != nil {
-		conn.Close() // Close the connection if sending fails
+	if err := network.SendWithLen(conn, responseBytes); err != nil {
+		cipher.Close()
 		return nil, fmt.Errorf("failed to send response: %w", err)
 	}
 
-	// Update session status to established
-	session.status = StatusEstablished
-	session.lastActivity = time.Now()
-
-	return session, nil
-}
-
-func connect(remote string) (net.Conn, error) {
-	// TODO consider timeout and threading
-	conn, err := net.DialTimeout("tcp", remote, 30*time.Second)
-	if err != nil {
-		return nil, err
-	}
-
-	return conn, nil
+	now := time.Now()
+	return &Session{
+		connection: conn,
+		peer: PeerInfo{
+			ID:          peerID,
+			Address:     conn.RemoteAddr(),
+			Certificate: *peerCert,
+			LastSeen:    now,
+		},
+		cipher:       cipher,
+		status:       StatusEstablished,
+		established:  now,
+		lastActivity: now,
+		sessionID:    uuid.NewV7(),
+	}, nil
 }
 
 // EstablishKeyExchange performs the PQXDH key exchange and sets up the encryption
@@ -223,11 +237,14 @@ func (s *Session) EstablishKeyExchange(identity *ClientIdentity) error {
 		return ErrSessionClosed
 	}
 
+	_ = s.connection.SetDeadline(time.Now().Add(handshakeTimeout))
+	defer s.connection.SetDeadline(time.Time{})
+
 	if !hasAuthenticatedIdentity(identity) {
 		return s.establishUnauthenticatedKeyExchange(identity)
 	}
 
-	exchange, err := auth.NewAuthenticatedPQXDHClient(identity.Certificate, identity.PrivateKey, identity.Verifier, identity.ID)
+	exchange, err := auth.NewAuthenticatedPQXDHClient(identity.Certificate, identity.PrivateKey, identity.Verifier)
 	if err != nil {
 		return fmt.Errorf("failed to create authenticated PQXDH client: %w", err)
 	}
@@ -240,9 +257,7 @@ func (s *Session) EstablishKeyExchange(identity *ClientIdentity) error {
 		return err
 	}
 
-	// Send the hello message to the server
-	err = network.SendWithLen(s.connection, helloBytes)
-	if err != nil {
+	if err := sendHandshake(s.connection, handshakeModeAuthenticated, helloBytes); err != nil {
 		return fmt.Errorf("failed to send hello message: %w", err)
 	}
 
@@ -256,111 +271,140 @@ func (s *Session) EstablishKeyExchange(identity *ClientIdentity) error {
 		return fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	key, err := exchange.ProcessServerResponse(response)
+	key, peerID, err := exchange.ProcessServerResponse(response)
 	if err != nil {
 		return fmt.Errorf("failed to process server response: %w", err)
 	}
-	// Initialize the AES cipher with the derived key
+	if s.peer.ID != uuid.Nil() && s.peer.ID != peerID {
+		return ErrUnexpectedPeer
+	}
+	peerCert, err := x509.ParseCertificate(response.Certificate)
+	if err != nil {
+		return fmt.Errorf("failed to parse peer certificate: %w", err)
+	}
+
 	cipher, err := aes.NewAES256(key)
 	if err != nil {
 		return fmt.Errorf("failed to initialize AES cipher: %w", err)
 	}
-	// Set the cipher in the session
-	s.cipher = cipher
 
-	// Update session status to established
+	now := time.Now()
+	s.peer.ID = peerID
+	s.peer.Certificate = *peerCert
+	s.peer.LastSeen = now
+	s.cipher = cipher
 	s.status = StatusEstablished
-	s.lastActivity = time.Now()
+	s.established = now
+	s.lastActivity = now
 
 	return nil
 }
 
-// Send encrypts and sends data to the peer
+// Send encrypts and sends a data frame to the peer
 func (s *Session) Send(data []byte) error {
+	frame := make([]byte, 1+len(data))
+	frame[0] = frameData
+	copy(frame[1:], data)
+	return s.sendFrame(frame)
+}
+
+// SendKeepalive sends an empty frame so the peer knows this side is alive.
+func (s *Session) SendKeepalive() error {
+	return s.sendFrame([]byte{frameKeepalive})
+}
+
+func (s *Session) sendFrame(frame []byte) error {
 	s.mu.RLock()
 	conn := s.connection
-	if s.closed || conn == nil {
-		s.mu.RUnlock()
-		return ErrSessionClosed
-	}
-
-	if s.status != StatusEstablished {
-		s.mu.RUnlock()
-		return errors.New("session not established")
-	}
-
 	cipher := s.cipher
-	if cipher == nil {
-		s.mu.RUnlock()
-		return errors.New("encryption not initialized")
-	}
+	closed := s.closed
+	status := s.status
 	s.mu.RUnlock()
 
-	// Encrypt the data
-	encrypted, err := cipher.Encrypt(data)
+	if closed || conn == nil {
+		return ErrSessionClosed
+	}
+	if status != StatusEstablished || cipher == nil {
+		return ErrSessionNotEstablished
+	}
+
+	encrypted, err := cipher.Encrypt(frame)
 	if err != nil {
 		return err
 	}
 
-	if err := network.SendWithLen(conn, encrypted); err != nil {
+	s.writeMu.Lock()
+	_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	err = network.SendWithLen(conn, encrypted)
+	s.writeMu.Unlock()
+	if err != nil {
+		// A frame may have been partly written, so the stream is no longer
+		// usable. Closing also unblocks the reader so the owner notices.
+		_ = s.Close()
 		return fmt.Errorf("failed to write to connection: %w", err)
 	}
-
-	s.mu.Lock()
-	s.lastActivity = time.Now()
-	s.mu.Unlock()
-
 	return nil
 }
 
-// Read receives and decrypts the next encrypted frame from the session connection.
+// Read blocks until the next data frame arrives and returns its payload.
+// Keepalive frames are consumed silently.
 func (s *Session) Read() ([]byte, error) {
-	s.mu.RLock()
-	conn := s.connection
-	if s.closed || conn == nil {
+	for {
+		s.mu.RLock()
+		conn := s.connection
+		closed := s.closed
 		s.mu.RUnlock()
-		return nil, ErrSessionClosed
-	}
-	s.mu.RUnlock()
+		if closed || conn == nil {
+			return nil, ErrSessionClosed
+		}
 
-	encrypted, err := network.RecvWithLen(conn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read from connection: %w", err)
-	}
+		encrypted, err := network.RecvWithLen(conn)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read from connection: %w", err)
+		}
 
-	return s.Receive(encrypted)
+		frame, err := s.decrypt(encrypted)
+		if err != nil {
+			return nil, err
+		}
+		if len(frame) == 0 {
+			return nil, errors.New("received empty frame")
+		}
+
+		switch frame[0] {
+		case frameData:
+			return frame[1:], nil
+		case frameKeepalive:
+			continue
+		default:
+			return nil, fmt.Errorf("unknown frame type %d", frame[0])
+		}
+	}
 }
 
-// Receive decrypts data received from the peer
-func (s *Session) Receive(encryptedData []byte) ([]byte, error) {
+func (s *Session) decrypt(encryptedData []byte) ([]byte, error) {
 	s.mu.RLock()
-	if s.closed {
-		s.mu.RUnlock()
-		return nil, ErrSessionClosed
-	}
-
-	if s.status != StatusEstablished {
-		s.mu.RUnlock()
-		return nil, errors.New("session not established")
-	}
-
-	if s.cipher == nil {
-		s.mu.RUnlock()
-		return nil, errors.New("encryption not initialized")
-	}
-
+	closed := s.closed
+	status := s.status
 	cipher := s.cipher
 	s.mu.RUnlock()
 
-	// Decrypt the data
+	if closed {
+		return nil, ErrSessionClosed
+	}
+	if status != StatusEstablished || cipher == nil {
+		return nil, ErrSessionNotEstablished
+	}
+
 	decrypted, err := cipher.Decrypt(encryptedData)
 	if err != nil {
 		return nil, err
 	}
 
-	// Update last activity
+	now := time.Now()
 	s.mu.Lock()
-	s.lastActivity = time.Now()
+	s.lastActivity = now
+	s.peer.LastSeen = now
 	s.mu.Unlock()
 
 	return decrypted, nil
@@ -375,7 +419,9 @@ func (s *Session) Close() error {
 		return nil // Already closed
 	}
 
-	// Clean up the cipher
+	s.closed = true
+	s.status = StatusClosed
+
 	if s.cipher != nil {
 		s.cipher.Close()
 		s.cipher = nil
@@ -383,18 +429,11 @@ func (s *Session) Close() error {
 
 	if s.connection != nil {
 		err := s.connection.Close()
+		s.connection = nil
 		if err != nil {
 			return fmt.Errorf("failed to close connection: %w", err)
 		}
-		s.connection = nil
 	}
-
-	// TODO
-	// Close any open tunnels
-	// Additional cleanup would happen here
-
-	s.closed = true
-	s.status = StatusClosed
 
 	return nil
 }
@@ -413,6 +452,13 @@ func (s *Session) PeerInfo() PeerInfo {
 	return s.peer
 }
 
+// PeerID returns the remote peer's ID.
+func (s *Session) PeerID() uuid.UUID {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.peer.ID
+}
+
 // SessionID returns the unique ID for this session.
 func (s *Session) SessionID() uuid.UUID {
 	s.mu.RLock()
@@ -420,49 +466,64 @@ func (s *Session) SessionID() uuid.UUID {
 	return s.sessionID
 }
 
-// IdleTime returns how long the session has been idle
+// IdleTime returns how long it has been since a frame was received from the peer.
 func (s *Session) IdleTime() time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return time.Since(s.lastActivity)
 }
 
-// RekeyIfNeeded performs key rotation if the session has been active too long
-func (s *Session) RekeyIfNeeded(maxKeyAge time.Duration) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return ErrSessionClosed
-	}
-
-	keyAge := time.Since(s.established)
-	if keyAge < maxKeyAge {
-		// No need to rekey yet
-		return nil
-	}
-
-	// Set status to rekeying
-	s.status = StatusRekeying
-
-	// TODO
-	// In a real implementation, you would:
-	// 1. Initiate a new key exchange
-	// 2. Update the cipher with the new key
-	// 3. Reset the established timestamp
-	// 4. Return to established status
-
-	// For now, we'll just update the timestamp
-	s.established = time.Now()
-	s.status = StatusEstablished
-
-	return nil
+// KeyAge returns how long the current session key has been in use.
+func (s *Session) KeyAge() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return time.Since(s.established)
 }
 
 func hasAuthenticatedIdentity(identity *ClientIdentity) bool {
 	return identity != nil && identity.Certificate != nil && identity.PrivateKey != nil && identity.Verifier != nil
 }
 
+// sendHandshake writes the first handshake frame, prefixed with version and mode.
+func sendHandshake(conn net.Conn, mode byte, payload []byte) error {
+	frame := make([]byte, 2+len(payload))
+	frame[0] = protocolVersion
+	frame[1] = mode
+	copy(frame[2:], payload)
+	return network.SendWithLen(conn, frame)
+}
+
+// recvHandshake reads the first handshake frame and checks version and mode.
+func recvHandshake(conn net.Conn, wantMode byte) ([]byte, error) {
+	frame, err := network.RecvWithLen(conn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read hello message: %w", err)
+	}
+	if len(frame) < 2 {
+		return nil, fmt.Errorf("%w: hello too short", ErrHandshakeMismatch)
+	}
+	if frame[0] != protocolVersion {
+		return nil, fmt.Errorf("%w: protocol version %d, want %d", ErrHandshakeMismatch, frame[0], protocolVersion)
+	}
+	if frame[1] != wantMode {
+		return nil, fmt.Errorf("%w: peer handshake mode %s, this node requires %s", ErrHandshakeMismatch, modeName(frame[1]), modeName(wantMode))
+	}
+	return frame[2:], nil
+}
+
+func modeName(mode byte) string {
+	switch mode {
+	case handshakeModeAuthenticated:
+		return "authenticated"
+	case handshakeModeUnauthenticated:
+		return "unauthenticated"
+	default:
+		return fmt.Sprintf("unknown(%d)", mode)
+	}
+}
+
+// establishUnauthenticatedKeyExchange runs PQXDH without certificates. Peers are
+// not authenticated, so this path is only for tests and development.
 func (s *Session) establishUnauthenticatedKeyExchange(identity *ClientIdentity) error {
 	exchange, err := pqxdh.NewPQXDHClient()
 	if err != nil {
@@ -485,7 +546,7 @@ func (s *Session) establishUnauthenticatedKeyExchange(identity *ClientIdentity) 
 		return fmt.Errorf("failed to marshal hello: %w", err)
 	}
 
-	if err := network.SendWithLen(s.connection, helloBytes); err != nil {
+	if err := sendHandshake(s.connection, handshakeModeUnauthenticated, helloBytes); err != nil {
 		return fmt.Errorf("failed to send hello message: %w", err)
 	}
 
@@ -514,69 +575,49 @@ func (s *Session) establishUnauthenticatedKeyExchange(identity *ClientIdentity) 
 		return fmt.Errorf("failed to initialize AES cipher: %w", err)
 	}
 
+	now := time.Now()
 	s.cipher = cipher
 	s.status = StatusEstablished
-	s.lastActivity = time.Now()
+	s.established = now
+	s.lastActivity = now
 
 	return nil
 }
 
 func newUnauthenticatedSessionFromConn(conn net.Conn) (*Session, error) {
-	helloBytes, err := network.RecvWithLen(conn)
+	helloBytes, err := recvHandshake(conn, handshakeModeUnauthenticated)
 	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("failed to read hello message: %w", err)
+		return nil, err
 	}
 
 	var hello unauthenticatedHandshakeHello
 	if err := json.Unmarshal(helloBytes, &hello); err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("failed to unmarshal hello: %w", err)
 	}
 
 	clientPQPubKey, err := pqxdh.ParsePQPublicKey(hello.PQPublicKey)
 	if err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("failed to parse client PQ public key: %w", err)
 	}
 
 	clientECPubKey, err := pqxdh.ParseECPublicKey(hello.ECPublicKey)
 	if err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("failed to parse client EC public key: %w", err)
 	}
 
 	exchange, err := pqxdh.NewPQXDHServer()
 	if err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("failed to create PQXDH server: %w", err)
 	}
 
 	key, ciphertext, err := pqxdh.ServerKeyExchange(clientPQPubKey, clientECPubKey, *exchange)
 	if err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("PQXDH server key exchange failed: %w", err)
 	}
 
 	cipher, err := aes.NewAES256(key)
 	if err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
-	}
-
-	peerID := hello.ID
-	if peerID == uuid.Nil() {
-		peerID = uuid.NewV7()
-	}
-
-	session := &Session{
-		connection:   conn,
-		peer:         PeerInfo{ID: peerID, Address: conn.RemoteAddr(), LastSeen: time.Now()},
-		cipher:       cipher,
-		status:       StatusEstablished,
-		established:  time.Now(),
-		lastActivity: time.Now(),
-		sessionID:    uuid.NewV7(),
 	}
 
 	response := unauthenticatedHandshakeResponse{
@@ -585,14 +626,28 @@ func newUnauthenticatedSessionFromConn(conn net.Conn) (*Session, error) {
 	}
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
-		conn.Close()
+		cipher.Close()
 		return nil, fmt.Errorf("failed to marshal response: %w", err)
 	}
 
 	if err := network.SendWithLen(conn, responseBytes); err != nil {
-		conn.Close()
+		cipher.Close()
 		return nil, fmt.Errorf("failed to send response: %w", err)
 	}
 
-	return session, nil
+	peerID := hello.ID
+	if peerID == uuid.Nil() {
+		peerID = uuid.NewV7()
+	}
+
+	now := time.Now()
+	return &Session{
+		connection:   conn,
+		peer:         PeerInfo{ID: peerID, Address: conn.RemoteAddr(), LastSeen: now},
+		cipher:       cipher,
+		status:       StatusEstablished,
+		established:  now,
+		lastActivity: now,
+		sessionID:    uuid.NewV7(),
+	}, nil
 }

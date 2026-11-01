@@ -48,9 +48,11 @@ func (cv *ClientCertificateVerifier) VerifyPeerCertificate(certDER []byte) (*x50
 	roots := x509.NewCertPool()
 	roots.AddCert(cv.caCert)
 
-	// Verify the certificate
+	// Peers authenticate with client certificates; this also rejects the
+	// discovery server's TLS certificate, which is ServerAuth only.
 	opts := x509.VerifyOptions{
-		Roots: roots,
+		Roots:     roots,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
 
 	_, err = cert.Verify(opts)

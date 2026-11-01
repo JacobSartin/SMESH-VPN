@@ -62,7 +62,7 @@ type CertificateAuthority struct {
 	// IsLocked indicates if the CA is currently locked (requiring authentication)
 	IsLocked bool
 	// Metadata contains additional information about the CA
-	Metadata map[string]interface{}
+	Metadata map[string]any
 	// DeviceInfo contains information about the CA device
 	DeviceInfo map[string]string
 	// Certificate is the template used for generating new certificates
@@ -74,8 +74,6 @@ type CertificateAuthority struct {
 	// StopCleanup is a channel to signal the cleanup goroutine to stop
 	StopCleanup    chan struct{} // CleanupRunning indicates if the cleanup goroutine is currently running
 	CleanupRunning bool
-	// Serial number management
-	nextSerialNumber *big.Int // Counter for unique serial numbers
 	// CRL management
 	crlManager *CRLManager
 }
@@ -87,20 +85,8 @@ func NewCertificateAuthority() (*CertificateAuthority, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate CA key pair: %w", err)
 	}
-	ca := &CertificateAuthority{
-		ID:               uuid.NewV7().String(),
-		PrivateKey:       priv,
-		PublicKey:        priv.PublicKey(),
-		Certificates:     make(map[string]*x509.Certificate),
-		CreatedAt:        time.Now(),
-		ExpiresAt:        time.Now().Add(10 * 365 * 24 * time.Hour), // 10 years
-		IsLocked:         false,
-		Metadata:         make(map[string]interface{}),
-		DeviceInfo:       make(map[string]string),
-		CleanupInterval:  24 * time.Hour, // Daily cleanup
-		StopCleanup:      make(chan struct{}),
-		nextSerialNumber: big.NewInt(2), // Start at 2 since CA uses serial number 1
-	}
+	now := time.Now()
+	ca := newCertificateAuthority(priv, now, now.Add(10*365*24*time.Hour)) // 10 years
 
 	// Create the CA certificate
 	caCert, err := ca.createCACertificate()
@@ -109,10 +95,34 @@ func NewCertificateAuthority() (*CertificateAuthority, error) {
 	} // Set the certificate template for future client certificates
 	ca.Certificate = caCert
 
-	// Initialize CRL manager
-	ca.crlManager = NewCRLManager(365 * 24 * time.Hour) // 1 year CRL validity
-
 	return ca, nil
+}
+
+func newCertificateAuthority(priv *mldsa.PrivateKey, createdAt, expiresAt time.Time) *CertificateAuthority {
+	return &CertificateAuthority{
+		ID:              uuid.NewV7().String(),
+		PrivateKey:      priv,
+		PublicKey:       priv.PublicKey(),
+		Certificates:    make(map[string]*x509.Certificate),
+		CreatedAt:       createdAt,
+		ExpiresAt:       expiresAt,
+		IsLocked:        false,
+		Metadata:        make(map[string]any),
+		DeviceInfo:      make(map[string]string),
+		CleanupInterval: 24 * time.Hour, // Daily cleanup
+		StopCleanup:     make(chan struct{}),
+		crlManager:      NewCRLManager(365 * 24 * time.Hour), // 1 year CRL validity
+	}
+}
+
+// randomSerialNumber returns a random 128-bit serial. Serials must stay unique
+// across separate runs against a CA loaded from disk, so a counter is not enough.
+func randomSerialNumber() (*big.Int, error) {
+	serial, err := rand.Int(rand.Reader, new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(2)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate serial number: %w", err)
+	}
+	return serial.Add(serial, big.NewInt(2)), nil // 1 is reserved for the CA certificate
 }
 
 // createCACertificate creates the root CA certificate
@@ -160,9 +170,10 @@ func (ca *CertificateAuthority) IssueClientCertificate(clientPubKey *mldsa.Publi
 		return nil, ErrCertificateAlreadyExists
 	}
 
-	// Use a monotonic serial counter to guarantee uniqueness.
-	serialNumber := new(big.Int).Set(ca.nextSerialNumber)
-	ca.nextSerialNumber = new(big.Int).Add(ca.nextSerialNumber, big.NewInt(1))
+	serialNumber, err := randomSerialNumber()
+	if err != nil {
+		return nil, err
+	}
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
@@ -208,8 +219,10 @@ func (ca *CertificateAuthority) IssueServerCertificate(serverPubKey *mldsa.Publi
 		return nil, ErrCertificateAlreadyExists
 	}
 
-	serialNumber := new(big.Int).Set(ca.nextSerialNumber)
-	ca.nextSerialNumber = new(big.Int).Add(ca.nextSerialNumber, big.NewInt(1))
+	serialNumber, err := randomSerialNumber()
+	if err != nil {
+		return nil, err
+	}
 	template := &x509.Certificate{
 		SerialNumber:          serialNumber,
 		Subject:               pkix.Name{CommonName: "SMESH-VPN-Discovery-" + serverID},
